@@ -12,11 +12,9 @@ import datetime
 import logging
 import os
 from collections import defaultdict
-from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
-import numpy as np
 import xarray as xr
 
 from .config import ModvxConfig

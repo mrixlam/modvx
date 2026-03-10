@@ -12,10 +12,8 @@ Provides the ``modvx`` entry-point with subcommands:
 from __future__ import annotations
 
 import argparse
-import datetime
 import logging
 import sys
-from pathlib import Path
 from typing import List, Optional
 
 from .config import ModvxConfig, load_config, merge_cli_overrides

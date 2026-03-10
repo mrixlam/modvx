@@ -9,9 +9,8 @@ suitable for verification.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional
 
-import numpy as np
 import xarray as xr
 
 logger = logging.getLogger(__name__)

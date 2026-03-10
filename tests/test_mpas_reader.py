@@ -1,7 +1,6 @@
 """Tests for modvx.mpas_reader — MPAS mesh loading and input file consistency."""
 
 import datetime
-import os
 from pathlib import Path
 
 import numpy as np
@@ -81,7 +80,7 @@ class TestLoadMpasPrecipSynthetic:
     def test_coords_merged_from_grid(self, _synth_files) -> None:
         """Verify that load_mpas_precip correctly sources lonCell and latCell coordinates from the grid file, since MPAS diagnostic files do not contain mesh coordinate variables. This test opens the raw diag file directly and confirms that lonCell is absent, then calls load_mpas_precip to assert that coordinate merging from the grid file produces a valid result. Proper coordinate merging is essential for subsequent remapping of the unstructured mesh to a regular lat-lon grid."""
         diag, grid, *_ = _synth_files
-        result = load_mpas_precip(diag, grid)
+        load_mpas_precip(diag, grid)
         # The function should have opened the grid to get coordinates
         ds = xr.open_dataset(diag)
         assert "lonCell" not in ds

@@ -1,7 +1,6 @@
 """Tests for modvx.config."""
 
 import datetime
-import tempfile
 from pathlib import Path
 
 import pytest

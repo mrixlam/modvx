@@ -19,7 +19,7 @@ import datetime
 import logging
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .config import ModvxConfig
 from .data_validator import DataValidator

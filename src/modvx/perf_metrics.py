@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-from itertools import product
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -29,7 +28,6 @@ import xarray as xr
 from scipy.ndimage import uniform_filter
 
 from .config import ModvxConfig
-from .utils import format_threshold_for_filename
 
 logger = logging.getLogger(__name__)
 

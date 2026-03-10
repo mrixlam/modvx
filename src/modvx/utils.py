@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime
 import re
-from typing import Generator, Union
+from typing import Generator
 
 import numpy as np
 import xarray as xr
