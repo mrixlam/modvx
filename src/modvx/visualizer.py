@@ -148,7 +148,8 @@ class Visualizer:
             f"{metric_label} vs Lead Time | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
             fontsize=16, fontweight="bold", pad=20,
         )
-        ax.legend(loc="best", fontsize=10, framealpha=0.9)
+        if ax.get_legend_handles_labels()[1]:
+            ax.legend(loc="best", fontsize=10, framealpha=0.9)
         ax.grid(True, alpha=0.3, linestyle="--")
 
         if all_vals:
@@ -275,7 +276,8 @@ class Visualizer:
             f"{metric_label} Difference | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
             fontsize=16, fontweight="bold", pad=20,
         )
-        ax.legend(loc="best", fontsize=10, framealpha=0.9)
+        if ax.get_legend_handles_labels()[1]:
+            ax.legend(loc="best", fontsize=10, framealpha=0.9)
         ax.grid(True, alpha=0.3, linestyle="--")
         ax.tick_params(labelsize=12)
         fig.tight_layout()

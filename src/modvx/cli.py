@@ -21,9 +21,20 @@ from .utils import parse_datetime
 
 
 def _setup_logging(cfg: ModvxConfig) -> None:
-    """Configure root logging so that logger.info messages are visible on the console.
+    """
+    Configure root logging so that logger.info messages are visible on the console.
     The ``run`` subcommand relies on TaskManager to do this; other subcommands bypass
-    TaskManager entirely, so this helper fills the gap."""
+    TaskManager entirely, so this helper fills the gap. Sets the log level to DEBUG
+    when verbose mode is enabled in the configuration, or INFO otherwise. Uses
+    ``logging.basicConfig`` with ``force=True`` so the handler is always applied,
+    even if a root handler was already installed.
+
+    Parameters:
+        cfg (ModvxConfig): Run configuration used to determine the logging level.
+
+    Returns:
+        None
+    """
     level = logging.DEBUG if cfg.verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -61,6 +72,20 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 # ======================================================================
 
 def _build_run_parser(sub: argparse._SubParsersAction) -> None:
+    """
+    Register all CLI arguments for the ``run`` subcommand on the provided subparsers action.
+    Creates and configures the ``run`` subparser with arguments for experiment name, cycle
+    start/end, forecast and observation timing, verification domains, target resolution, and
+    the MPAS grid file path. Also registers backend selection (``--backend``), worker count
+    (``--nprocs``), and a shared observation cache directory (``--cache-dir``) for
+    multiprocessing runs.
+
+    Parameters:
+        sub (argparse._SubParsersAction): The subparsers action to register the 'run' subcommand on.
+
+    Returns:
+        None
+    """
     p = sub.add_parser("run", help="Execute the FSS computation pipeline.")
     _add_common_args(p)
 
@@ -163,6 +188,19 @@ def _cmd_run(args: argparse.Namespace) -> None:
 # ======================================================================
 
 def _build_extract_parser(sub: argparse._SubParsersAction) -> None:
+    """
+    Register all CLI arguments for the ``extract-csv`` subcommand on the provided subparsers action.
+    Creates and configures the ``extract-csv`` subparser with arguments for locating FSS
+    NetCDF output files (``--output-dir``) and writing per-experiment CSV summaries
+    (``--csv-dir``). Common arguments such as ``--config`` and ``--verbose`` are
+    added via ``_add_common_args``.
+
+    Parameters:
+        sub (argparse._SubParsersAction): The subparsers action to register the 'extract-csv' subcommand on.
+
+    Returns:
+        None
+    """
     p = sub.add_parser("extract-csv", help="Extract FSS NetCDF results to CSV.")
     _add_common_args(p)
     p.add_argument("--output-dir", type=str, default=None)
@@ -196,6 +234,20 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 # ======================================================================
 
 def _build_plot_parser(sub: argparse._SubParsersAction) -> None:
+    """
+    Register all CLI arguments for the ``plot`` subcommand on the provided subparsers action.
+    Creates and configures the ``plot`` subparser with arguments for filtering by domain,
+    threshold, and accumulation window, and for controlling output locations (``--csv-dir``,
+    ``--output-dir``). Supports an optional ``--metric`` filter for selecting specific
+    metrics to plot and an ``--all`` flag to generate every available combination
+    automatically.
+
+    Parameters:
+        sub (argparse._SubParsersAction): The subparsers action to register the 'plot' subcommand on.
+
+    Returns:
+        None
+    """
     p = sub.add_parser("plot", help="Generate metric vs lead-time plots.")
     _add_common_args(p)
     p.add_argument("--domain", type=str, default=None)
@@ -255,6 +307,19 @@ def _cmd_plot(args: argparse.Namespace) -> None:
 # ======================================================================
 
 def _build_validate_parser(sub: argparse._SubParsersAction) -> None:
+    """
+    Register all CLI arguments for the ``validate`` subcommand on the provided subparsers action.
+    Creates and configures the ``validate`` subparser with a single ``--csv-dir`` argument
+    for specifying where to look for CSV output files. The subcommand prints the unique
+    domains, thresholds, and window sizes available and exits with code 1 when no data
+    is found.
+
+    Parameters:
+        sub (argparse._SubParsersAction): The subparsers action to register the 'validate' subcommand on.
+
+    Returns:
+        None
+    """
     p = sub.add_parser("validate", help="List available domains, thresholds, and windows.")
     _add_common_args(p)
     p.add_argument("--csv-dir", type=str, default=None)

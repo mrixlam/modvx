@@ -1,7 +1,9 @@
 """Tests for modvx.mpas_reader — MPAS mesh loading and input file consistency."""
 
 import datetime
+import types
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -358,3 +360,287 @@ class TestAccumulationConsistency:
         assert float(accum.max()) < 500.0, (
             f"Unreasonable 6h precip: max={float(accum.max()):.1f} mm"
         )
+
+
+# -----------------------------------------------------------------------
+# _ensure_mpasdiag branches
+# -----------------------------------------------------------------------
+
+
+class TestEnsureMpasdiagBranches:
+    """Cover _ensure_mpasdiag import-error, cached-true, and success paths."""
+
+    def test_ensure_mpasdiag_import_error(self) -> None:
+        """
+        Verify that _ensure_mpasdiag raises ImportError when the mpasdiag package cannot be imported.
+        The function probes for mpasdiag at call time and must raise ImportError with a message containing
+        'mpasdiag is required' when the package is missing. This guards against silent failures where
+        remapping would proceed without the required library and produce incorrect output.
+
+        Returns:
+            None
+        """
+        from modvx import mpas_reader
+
+        old_val = mpas_reader._HAS_MPASDIAG
+        mpas_reader._HAS_MPASDIAG = None
+        with patch.dict("sys.modules", {
+            "mpasdiag": None,
+            "mpasdiag.processing": None,
+            "mpasdiag.processing.remapping": None,
+            "mpasdiag.processing.utils_geog": None,
+        }):
+            with pytest.raises(ImportError, match="mpasdiag is required"):
+                mpas_reader._ensure_mpasdiag()
+        mpas_reader._HAS_MPASDIAG = old_val
+
+    def test_ensure_mpasdiag_cached_true(self) -> None:
+        """
+        Verify that _ensure_mpasdiag returns immediately without re-importing when already cached as True.
+        After a successful import the _HAS_MPASDIAG flag is set to True so subsequent calls skip the
+        import probe entirely. This test pre-sets the flag and confirms no ImportError is raised, which
+        would be the symptom if the import was attempted again in a patched environment.
+
+        Returns:
+            None
+        """
+        from modvx import mpas_reader
+
+        old_val = mpas_reader._HAS_MPASDIAG
+        mpas_reader._HAS_MPASDIAG = True
+        mpas_reader._ensure_mpasdiag()  # should not raise
+        mpas_reader._HAS_MPASDIAG = old_val
+
+    def test_successful_import(self) -> None:
+        """
+        Verify that _ensure_mpasdiag successfully imports fake mpasdiag modules and sets _HAS_MPASDIAG to True.
+        This test injects synthetic module objects into sys.modules to simulate a valid mpasdiag installation.
+        After the first call _HAS_MPASDIAG must be True, and a second call must be a no-op confirming
+        the early-return cache path also works for the success branch.
+
+        Returns:
+            None
+        """
+        import modvx.mpas_reader as mr
+        import sys
+
+        mr._HAS_MPASDIAG = None
+
+        fake_remapping = types.ModuleType("mpasdiag.processing.remapping")
+        fake_remapping.remap_mpas_to_latlon_with_masking = MagicMock()
+
+        fake_utils = types.ModuleType("mpasdiag.processing.utils_geog")
+        fake_utils.MPASGeographicUtils = MagicMock()
+
+        fake_processing = types.ModuleType("mpasdiag.processing")
+        fake_mpasdiag = types.ModuleType("mpasdiag")
+
+        saved = {}
+        keys = [
+            "mpasdiag", "mpasdiag.processing",
+            "mpasdiag.processing.remapping",
+            "mpasdiag.processing.utils_geog",
+        ]
+        for k in keys:
+            saved[k] = sys.modules.get(k)
+
+        try:
+            sys.modules["mpasdiag"] = fake_mpasdiag
+            sys.modules["mpasdiag.processing"] = fake_processing
+            sys.modules["mpasdiag.processing.remapping"] = fake_remapping
+            sys.modules["mpasdiag.processing.utils_geog"] = fake_utils
+
+            mr._ensure_mpasdiag()
+            assert mr._HAS_MPASDIAG is True
+
+            # Calling again should be a no-op (early return)
+            mr._ensure_mpasdiag()
+            assert mr._HAS_MPASDIAG is True
+        finally:
+            for k in keys:
+                if saved[k] is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = saved[k]
+            mr._HAS_MPASDIAG = None
+
+
+# -----------------------------------------------------------------------
+# remap_to_latlon
+# -----------------------------------------------------------------------
+
+
+class TestRemapToLatlonWithGrid:
+    """Cover remap_to_latlon body — with lonCell present and with grid fallback."""
+
+    def test_remap_with_grid_fallback(self, tmp_path: Path) -> None:
+        """
+        Verify that remap_to_latlon loads spatial coordinates from grid_file when lonCell is absent in the dataset.
+        This covers the fallback branch where the main diagnostic file does not include grid coordinate
+        variables and a separate mesh file must be opened to obtain lat/lon cell positions.
+        The test confirms the remapping function is still called once and the result has the expected dims.
+
+        Returns:
+            None
+        """
+        import modvx.mpas_reader as mr
+        import sys
+
+        ds = xr.Dataset({"precip": (["nCells"], np.array([1.0, 2.0, 3.0]))})
+        ds_path = tmp_path / "diag.nc"
+        ds.to_netcdf(str(ds_path))
+
+        grid_ds = xr.Dataset({
+            "lonCell": (["nCells"], np.array([0.0, 1.0, 2.0])),
+            "latCell": (["nCells"], np.array([10.0, 20.0, 30.0])),
+        })
+        grid_path = tmp_path / "grid.nc"
+        grid_ds.to_netcdf(str(grid_path))
+
+        fake_extract = MagicMock(
+            return_value=(np.array([0.0, 1.0, 2.0]), np.array([10.0, 20.0, 30.0])),
+        )
+        fake_extent = MagicMock(return_value=(0.0, 2.0, 10.0, 30.0))
+        mock_utils = MagicMock()
+        mock_utils.extract_spatial_coordinates = fake_extract
+        mock_utils.get_extent_from_coordinates = fake_extent
+
+        remapped_da = xr.DataArray(
+            np.ones((2, 2)),
+            dims=["lat", "lon"],
+            coords={"lat": [10.0, 30.0], "lon": [0.0, 2.0]},
+        )
+        mock_remap = MagicMock(return_value=remapped_da)
+
+        mr._HAS_MPASDIAG = True
+
+        fake_remapping_mod = types.ModuleType("mpasdiag.processing.remapping")
+        fake_remapping_mod.remap_mpas_to_latlon_with_masking = mock_remap
+        fake_utils_mod = types.ModuleType("mpasdiag.processing.utils_geog")
+        fake_utils_mod.MPASGeographicUtils = mock_utils
+
+        saved = {}
+        keys = [
+            "mpasdiag", "mpasdiag.processing",
+            "mpasdiag.processing.remapping",
+            "mpasdiag.processing.utils_geog",
+        ]
+        for k in keys:
+            saved[k] = sys.modules.get(k)
+
+        try:
+            sys.modules["mpasdiag"] = types.ModuleType("mpasdiag")
+            sys.modules["mpasdiag.processing"] = types.ModuleType("mpasdiag.processing")
+            sys.modules["mpasdiag.processing.remapping"] = fake_remapping_mod
+            sys.modules["mpasdiag.processing.utils_geog"] = fake_utils_mod
+
+            result = mr.remap_to_latlon(
+                data=np.array([1.0, 2.0, 3.0]),
+                dataset_or_file=str(ds_path),
+                grid_file=str(grid_path),
+                resolution=1.0,
+            )
+
+            assert "latitude" in result.dims
+            assert "longitude" in result.dims
+            mock_remap.assert_called_once()
+        finally:
+            for k in keys:
+                if saved[k] is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = saved[k]
+            mr._HAS_MPASDIAG = None
+
+    def test_remap_to_latlon_mocked(self, tmp_path: Path) -> None:
+        """
+        Verify the full remap_to_latlon path when lonCell is already present in the dataset.
+        This covers the nominal branch where spatial coordinates are read directly from the diagnostic
+        file without a separate grid file fallback. The test mocks the mpasdiag remapping function
+        and confirms the returned DataArray has latitude and longitude dimensions.
+
+        Returns:
+            None
+        """
+        from modvx import mpas_reader
+
+        n_cells = 10
+        ds = xr.Dataset({
+            "lonCell": ("nCells", np.linspace(0, 10, n_cells)),
+            "latCell": ("nCells", np.linspace(-5, 5, n_cells)),
+            "precip": ("nCells", np.random.default_rng(42).random(n_cells)),
+        })
+        ds_file = str(tmp_path / "ds.nc")
+        ds.to_netcdf(ds_file)
+
+        data = xr.DataArray(np.random.default_rng(42).random(n_cells), dims=["nCells"])
+
+        remapped = xr.DataArray(
+            np.ones((5, 5)),
+            dims=["lat", "lon"],
+            coords={"lat": np.arange(5.0), "lon": np.arange(5.0)},
+        )
+
+        mock_remap_fn = MagicMock(return_value=remapped)
+        mock_geo_utils = MagicMock()
+        mock_geo_utils.extract_spatial_coordinates.return_value = (
+            np.linspace(0, 10, n_cells), np.linspace(-5, 5, n_cells)
+        )
+        mock_geo_utils.get_extent_from_coordinates.return_value = (0.0, 10.0, -5.0, 5.0)
+
+        old_has = mpas_reader._HAS_MPASDIAG
+        mpas_reader._HAS_MPASDIAG = True
+
+        with patch.dict("sys.modules", {
+            "mpasdiag": MagicMock(),
+            "mpasdiag.processing": MagicMock(),
+            "mpasdiag.processing.remapping": MagicMock(
+                remap_mpas_to_latlon_with_masking=mock_remap_fn
+            ),
+            "mpasdiag.processing.utils_geog": MagicMock(
+                MPASGeographicUtils=mock_geo_utils
+            ),
+        }):
+            result = mpas_reader.remap_to_latlon(data, ds_file, ds_file, 0.5)
+
+        mpas_reader._HAS_MPASDIAG = old_has
+
+        assert "latitude" in result.dims
+        assert "longitude" in result.dims
+
+
+# -----------------------------------------------------------------------
+# load_and_remap_mpas_precip
+# -----------------------------------------------------------------------
+
+
+class TestLoadAndRemapMpasPrecip:
+    """Cover load_and_remap_mpas_precip convenience wrapper."""
+
+    def test_load_and_remap(self, tmp_path: Path) -> None:
+        """
+        Verify that load_and_remap_mpas_precip calls load_mpas_precip and remap_to_latlon with the correct arguments.
+        This convenience wrapper should call load_mpas_precip once with the diag_file and grid_file, then
+        pass the result to remap_to_latlon along with both file paths and the resolution. The final return
+        value must have the same shape as the remapped DataArray.
+
+        Returns:
+            None
+        """
+        from modvx import mpas_reader
+
+        old_has = mpas_reader._HAS_MPASDIAG
+        mpas_reader._HAS_MPASDIAG = True
+
+        mesh_precip = xr.DataArray(np.array([1.0, 2.0, 3.0]), dims=["nCells"])
+        remapped = xr.DataArray(np.ones((3, 3)), dims=["latitude", "longitude"])
+
+        with patch.object(mpas_reader, "load_mpas_precip", return_value=mesh_precip) as m_load, \
+             patch.object(mpas_reader, "remap_to_latlon", return_value=remapped) as m_remap:
+            result = mpas_reader.load_and_remap_mpas_precip("diag.nc", "grid.nc", 0.5)
+
+        mpas_reader._HAS_MPASDIAG = old_has
+
+        m_load.assert_called_once_with("diag.nc", "grid.nc")
+        m_remap.assert_called_once_with(mesh_precip, "diag.nc", "grid.nc", 0.5)
+        assert result.shape == (3, 3)
