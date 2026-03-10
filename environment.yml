@@ -1,0 +1,23 @@
+name: modvx
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - numpy>=1.24
+  - xarray>=2023.1
+  - scipy>=1.10
+  - pandas>=2.0
+  - matplotlib>=3.7
+  - pyyaml>=6.0
+  - netcdf4>=1.6
+  # Optional — MPI parallelism
+  - mpi4py>=3.1
+  # Optional — horizontal map plots
+  - cartopy>=0.21
+  # Development / testing
+  - pytest>=7.0
+  - pytest-cov>=4.0
+  - pip
+  - pip:
+    - -e .

@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MODvx"
+version = "0.1.0"
+description = "Model Verification Toolkit – A specialty verification pipeline for the NWP modelling community"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Rubaiat Islam", email = "mrislam@ucar.edu"},
+]
+keywords = ["verification", "FSS", "NWP", "meteorology", "precipitation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "xarray>=2023.1",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+    "netcdf4>=1.6",
+]
+
+[project.optional-dependencies]
+mpas = ["mpasdiag>=1.0"]
+mpi = ["mpi4py>=3.1"]
+cartopy = ["cartopy>=0.21"]
+all = ["mpasdiag>=1.0", "mpi4py>=3.1", "cartopy>=0.21"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+modvx = "modvx.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mrixlam/modvx"
+Repository = "https://github.com/mrixlam/modvx"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore:numpy.ndarray size changed:RuntimeWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

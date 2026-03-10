@@ -1,0 +1,90 @@
+# ============================================================
+# modvx default configuration
+# ============================================================
+# Copy this file and edit for your own experiment.
+# CLI flags override values set here.
+
+# ---- experiment / time range -------------------------------------------
+experiment_name: "liuz_coldstart_15km2025"
+initial_cycle_start: "20250613T00"
+final_cycle_start:   "20250709T00"
+forecast_step_hours: 12
+observation_interval_hours: 1
+cycle_interval_hours: 24
+forecast_length_hours: 48
+
+# ---- MPAS mesh settings ------------------------------------------------
+mpas_grid_file: ""  # path to MPAS grid file (relative to base_dir)
+mpas_remap_resolution: 0.1  # degrees for MPAS-to-latlon remapping
+
+# ---- grid / resolution ------------------------------------------------
+# "obs" = keep the observation grid; or a float (e.g. 0.25)
+target_resolution: "obs"
+
+# ---- verification domains -----------------------------------------------
+vxdomain:
+  - "GLOBAL"
+
+regions:
+  SINGV:     "singv_domain_mask.nc"
+  TROPICS:   "G004_TROPICS.nc"
+  GLOBAL:    "G004_GLOBAL.nc"
+  AFRICA:    "G004_AFRICA.nc"
+  ASIA:      "G004_ASIA.nc"
+  NAMERICA:  "G004_NAMERICA.nc"
+  SAMERICA:  "G004_SAMERICA.nc"
+  NHEM:      "G004_NHEM.nc"
+  SHEM:      "G004_SHEM.nc"
+  AUNZ:      "WAFS0P25_AUNZ.nc"
+
+# ---- metric parameters -------------------------------------------------
+thresholds:
+  - 90.0
+  - 95.0
+  - 97.5
+  - 99.0
+
+window_sizes:
+  - 1
+  - 3
+  - 5
+  - 7
+  - 9
+  - 11
+  - 13
+  - 15
+
+# "independent" = separate percentile thresholds for fcst & obs
+# "obs_only"    = compute threshold from obs and apply to both
+threshold_mode: "independent"
+
+# ---- variable names ----------------------------------------------------
+obs_var_name: "precip"
+
+# ---- directories -------------------------------------------------------
+base_dir: "."
+fcst_dir: "fcst"
+obs_dir:  "obs/FIMERG"
+mask_dir: "masks"
+output_dir: "output"
+debug_dir:  "debug"
+log_dir:    "logs"
+csv_dir:    "fss_csv"
+plot_dir:   "fss_plots"
+
+# ---- filename templates ------------------------------------------------
+observation_template: >-
+  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc
+
+obs_vintage_preference:
+  - "FNL"
+  - "LTE"
+
+# ---- I/O tuning --------------------------------------------------------
+compression_level: 9
+clip_buffer_deg: 1.0
+
+# ---- runtime flags -----------------------------------------------------
+verbose: false
+save_intermediate: false
+enable_logs: false
