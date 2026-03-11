@@ -1,17 +1,29 @@
-"""Tests for modvx.utils — small, stateless helpers."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx utilities module.
+
+This module verifies the small, stateless helper functions used throughout the modvx pipeline, including datetime parsing, filename metadata extraction, longitude normalization, and grid/time sequence generators. Tests exercise both normal and edge cases to ensure correct parsing, coordinate normalization, and iterator semantics. The suite is self-contained and uses lightweight fixtures so helpers can be validated in isolation without external data dependencies.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 
 import pytest
 
 from modvx.utils import (
-    extract_lead_time_hours,
+    extract_lead_time_hours_from_path,
     format_threshold_for_filename,
-    generate_forecast_cycles,
-    generate_valid_times,
+    iterate_forecast_cycle_starts,
+    iterate_valid_times,
     normalize_longitude,
-    parse_datetime,
-    parse_filename_metadata,
+    parse_datetime_string,
+    parse_fss_filename_metadata,
     standardize_coords,
 )
 
@@ -26,20 +38,20 @@ class TestParseDatetime:
         """
         Verify that parse_datetime correctly parses the compact canonical format 'YYYYMMDDThh' used throughout modvx configuration files. This is the primary timestamp format for initial_cycle_start and final_cycle_start fields in YAML configs, so parsing errors here would silently misconfigure the entire forecast cycle range. The test checks both the date and hour components to confirm no truncation or offset occurs.
         """
-        assert parse_datetime("20250613T00") == datetime.datetime(2025, 6, 13, 0, 0)
+        assert parse_datetime_string("20250613T00") == datetime.datetime(2025, 6, 13, 0, 0)
 
     def test_iso(self) -> None:
         """
         Confirm that parse_datetime also accepts ISO 8601 extended format with full date, time, and second components. Supporting this format ensures compatibility with datetime strings that may appear in NetCDF metadata, log output, or user-supplied overrides without requiring a separate parsing code path. The parsed result is compared against a known datetime object to verify all components are correctly extracted.
         """
-        assert parse_datetime("2024-09-23T06:00:00") == datetime.datetime(2024, 9, 23, 6, 0)
+        assert parse_datetime_string("2024-09-23T06:00:00") == datetime.datetime(2024, 9, 23, 6, 0)
 
     def test_invalid_raises(self) -> None:
         """
         Ensure that parse_datetime raises a ValueError when given a string that does not match any supported datetime format. Explicit failure on unrecognized input prevents invalid datetime objects from propagating into forecast cycle generators and producing nonsensical date ranges. This test uses an obviously malformed string to confirm that the format detection logic does not silently fall through to a default value.
         """
         with pytest.raises(ValueError):
-            parse_datetime("not-a-date")
+            parse_datetime_string("not-a-date")
 
 
 class TestFormatThreshold:
@@ -68,7 +80,7 @@ class TestGenerators:
         start = datetime.datetime(2025, 1, 1, 0)
         end = datetime.datetime(2025, 1, 1, 6)
         step = datetime.timedelta(hours=2)
-        result = list(generate_valid_times(start, end, step))
+        result = list(iterate_valid_times(start, end, step))
         assert len(result) == 3
         assert result[0] == start
         assert result[-1] == datetime.datetime(2025, 1, 1, 4)
@@ -80,7 +92,7 @@ class TestGenerators:
         start = datetime.datetime(2025, 1, 1, 0)
         end = datetime.datetime(2025, 1, 3, 0)
         step = datetime.timedelta(hours=24)
-        result = list(generate_forecast_cycles(start, end, step))
+        result = list(iterate_forecast_cycle_starts(start, end, step))
         assert len(result) == 3  # day 1, 2, 3
 
 
@@ -142,14 +154,14 @@ class TestParseFilenameMetadata:
         """
         Verify that parse_filename_metadata correctly extracts the domain, threshold, and window fields from a standard FSS output filename. The returned dictionary must contain all three keys with values matching the literal tokens encoded in the filename, since these are used to reconstruct plot labels and filter results during post-processing. This test uses a 'GLOBAL' domain with an integer-valued threshold to cover the most common output filename pattern.
         """
-        m = parse_filename_metadata("GLOBAL_FSS_12h_indep_thresh90p0percent_window3.nc")
+        m = parse_fss_filename_metadata("GLOBAL_FSS_12h_indep_thresh90p0percent_window3.nc")
         assert m == {"domain": "GLOBAL", "thresh": "90.0", "window": "3"}
 
     def test_decimal_thresh(self) -> None:
         """
         Confirm that parse_filename_metadata correctly extracts a decimal threshold value such as 97.5 from the 'p'-separated filename encoding. The extracted threshold string must be the reconstructed decimal form '97.5' rather than the raw 'p'-encoded form '97p5', so that it can be used directly in plot labels and numeric comparisons. This test covers the tropical 97.5th percentile threshold, which is among the most frequently used non-integer thresholds in the verification configuration.
         """
-        m = parse_filename_metadata("TROPICS_FSS_6h_indep_thresh97p5percent_window11.nc")
+        m = parse_fss_filename_metadata("TROPICS_FSS_6h_indep_thresh97p5percent_window11.nc")
         assert m is not None
         assert m["thresh"] == "97.5"
 
@@ -157,7 +169,7 @@ class TestParseFilenameMetadata:
         """
         Ensure that parse_filename_metadata returns None when the filename does not match the expected FSS output naming convention. Silent None returns allow callers to filter out unrelated files in a directory scan without raising exceptions or crashing the post-processing pipeline. This test uses a generic filename with no FSS-specific tokens to confirm the function degrades gracefully on unexpected input.
         """
-        assert parse_filename_metadata("random_file.nc") is None
+        assert parse_fss_filename_metadata("random_file.nc") is None
 
 
 class TestExtractLeadTime:
@@ -167,13 +179,13 @@ class TestExtractLeadTime:
         """
         Verify that extract_lead_time_hours correctly parses a 12-hour lead time from an output path containing the 'pp12h' directory component. Lead time information embedded in directory names is used to annotate FSS results by forecast hour and to organize output files without requiring metadata to be stored in the files themselves. The function must return the integer 12 rather than the string '12' or None for this path pattern.
         """
-        assert extract_lead_time_hours("output/exp/ExtendedFC/2025061300/pp12h/foo.nc") == 12
+        assert extract_lead_time_hours_from_path("output/exp/ExtendedFC/2025061300/pp12h/foo.nc") == 12
 
     def test_no_match(self) -> None:
         """
         Confirm that extract_lead_time_hours returns None when the path contains no 'ppNh' lead-time directory segment. Returning None for non-matching paths allows callers to skip files that do not follow the expected directory structure without raising exceptions. This test uses a flat two-component path to confirm the regex does not produce false positives on paths that have no lead-time encoding.
         """
-        assert extract_lead_time_hours("output/exp/foo.nc") is None
+        assert extract_lead_time_hours_from_path("output/exp/foo.nc") is None
 
 
 # -----------------------------------------------------------------------
@@ -210,7 +222,7 @@ class TestParseFilenameMissingParts:
         Returns:
             None
         """
-        result = parse_filename_metadata("GLOBAL_FSS_12h_indep_window5.nc")
+        result = parse_fss_filename_metadata("GLOBAL_FSS_12h_indep_window5.nc")
         assert result is None
 
     def test_parse_filename_missing_window(self) -> None:
@@ -220,5 +232,5 @@ class TestParseFilenameMissingParts:
         Returns:
             None
         """
-        result = parse_filename_metadata("GLOBAL_FSS_12h_indep_thresh90percent.nc")
+        result = parse_fss_filename_metadata("GLOBAL_FSS_12h_indep_thresh90percent.nc")
         assert result is None

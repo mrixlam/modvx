@@ -1,20 +1,24 @@
+#!/usr/bin/env python3
+
 """
 Configuration management for modvx.
 
-Provides a ``ModvxConfig`` dataclass that holds every tuneable parameter
-and a ``load_config`` helper that reads a YAML file and returns a validated
-instance.  CLI arguments can selectively override individual fields via
-``merge_cli_overrides``.
+This module defines the ModvxConfig class, which encapsulates all configuration parameters for a modvx verification run. The configuration is typically loaded from a YAML file and may be overridden by command-line arguments. The ModvxConfig class provides structured access to all settings, including paths, forecast and observation parameters, verification domains, thresholds, and parallel processing options. By centralizing configuration management in this class, we can ensure consistent handling of parameters across the entire pipeline and provide a single source of truth for all configurable aspects of the verification workflow. The module also includes a helper function to load the configuration from a YAML file and apply any necessary overrides.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
 """
 
 from __future__ import annotations
 
-import datetime
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-
 import yaml
+import datetime
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
 
 
 # ---------------------------------------------------------------------------
@@ -40,12 +44,7 @@ _DEFAULT_REGIONS: Dict[str, str] = {
 @dataclass
 class ModvxConfig:
     """
-    Central configuration dataclass for a complete modvx FSS verification run.
-    All path fields are stored as relative strings and resolved against ``base_dir``
-    at runtime, so the same YAML file remains portable across machines and working
-    directories. Temporal parameters are stored as raw integer hour counts and exposed
-    as ``datetime.timedelta`` properties for convenient arithmetic. Default values
-    reflect a typical global 48-hour forecast experiment configuration.
+    Central configuration dataclass for a complete modvx FSS verification run. All path fields are stored as relative strings and resolved against ``base_dir`` at runtime, so the same YAML file remains portable across machines and working directories. Temporal parameters are stored as raw integer hour counts and exposed as ``datetime.timedelta`` properties for convenient arithmetic. Default values reflect a typical global 48-hour forecast experiment configuration.
     """
 
     # ---- experiment / time range ------------------------------------------
@@ -130,12 +129,7 @@ class ModvxConfig:
 
     def resolve_path(self, rel: str) -> str:
         """
-        Resolve a relative path string against the configured base directory.
-        All directory fields in ModvxConfig are stored as relative strings and must
-        be resolved before use in filesystem operations. This helper centralises that
-        resolution so that the same YAML configuration file works regardless of the
-        current working directory. The result is returned as a plain string for
-        compatibility with os.path and xarray file-loading functions.
+        Resolve a relative path string against the configured base directory. All directory fields in ModvxConfig are stored as relative strings and must be resolved before use in filesystem operations. This helper centralises that resolution so that the same YAML configuration file works regardless of the current working directory. The result is returned as a plain string for compatibility with os.path and xarray file-loading functions.
 
         Parameters:
             rel (str): Relative path string to resolve against ``base_dir``.
@@ -145,13 +139,17 @@ class ModvxConfig:
         """
         return str(Path(self.base_dir) / rel)
 
+    def resolve_relative_path(self, rel: str) -> str:
+        """
+        More explicit alias for path resolution: resolve a relative path string
+        against the configured base directory and return it as an absolute
+        string. Kept as the canonical, descriptive name while preserving the
+        historical ``resolve_path`` name for compatibility.
+        """
+        return str(Path(self.base_dir) / rel)
     def resolve_mask_path(self, mask_filename: str) -> str:
         """
-        Resolve a mask filename to its full path under the configured mask directory.
-        Mask files are stored in a dedicated subdirectory (``mask_dir``) beneath ``base_dir``.
-        This helper constructs the full path by joining both directory levels with the filename.
-        It is used by TaskManager when loading region masks specified in the regions dictionary.
-        The result is a plain string suitable for passing to xarray or os.path functions.
+        Resolve a mask filename to its full path under the configured mask directory. Mask files are stored in a dedicated subdirectory (``mask_dir``) beneath ``base_dir``. This helper constructs the full path by joining both directory levels with the filename. It is used by TaskManager when loading region masks specified in the regions dictionary. The result is a plain string suitable for passing to xarray or os.path functions.
 
         Parameters:
             mask_filename (str): Bare filename of the mask NetCDF file
@@ -162,18 +160,22 @@ class ModvxConfig:
         """
         return str(Path(self.base_dir) / self.mask_dir / mask_filename)
 
+    def resolve_mask_fullpath(self, mask_filename: str) -> str:
+        """
+        Resolve a mask filename to its full absolute path under the configured
+        mask directory. This is a more explicit name than the older
+        ``resolve_mask_path`` helper; the legacy name is retained as an alias.
+        """
+        return str(Path(self.base_dir) / self.mask_dir / mask_filename)
+
 
 # ---------------------------------------------------------------------------
 # YAML loading
 # ---------------------------------------------------------------------------
 
-def _parse_datetime_str(s: str) -> datetime.datetime:
+def _parse_datetime_string(s: str) -> datetime.datetime:
     """
-    Parse a compact or ISO-8601 datetime string into a Python datetime object.
-    Accepted formats include the YAML-friendly ``yyyymmddThh`` compact form and
-    standard ISO-8601 variants with full time components. The function tries each
-    format sequentially and returns the first successful parse. A ValueError is
-    raised with the offending string when none of the formats match.
+    Parse a compact or ISO-8601 datetime string into a Python datetime object. Accepted formats include the YAML-friendly ``yyyymmddThh`` compact form and standard ISO-8601 variants with full time components. The function tries each format sequentially and returns the first successful parse. A ValueError is raised with the offending string when none of the formats match.
 
     Parameters:
         s (str): Datetime string in ``yyyymmddThh`` or ISO-8601 format.
@@ -189,14 +191,9 @@ def _parse_datetime_str(s: str) -> datetime.datetime:
     raise ValueError(f"Cannot parse datetime: {s!r}")
 
 
-def _coerce_value(key: str, raw: Any) -> Any:
+def _coerce_config_value(key: str, raw: Any) -> Any:
     """
-    Coerce a raw YAML scalar value to the Python type expected by ModvxConfig.
-    YAML loaders return string values as plain Python strings, but certain ModvxConfig
-    fields require datetime objects. This function identifies those fields by name
-    and applies the appropriate conversion via _parse_datetime_str. All other fields
-    are returned unchanged, relying on the dataclass constructor to perform any
-    remaining type coercion.
+    Coerce a raw YAML scalar value to the Python type expected by ModvxConfig. YAML loaders return string values as plain Python strings, but certain ModvxConfig fields require datetime objects. This function identifies those fields by name and applies the appropriate conversion via _parse_datetime_str. All other fields are returned unchanged, relying on the dataclass constructor to perform any remaining type coercion.
 
     Parameters:
         key (str): ModvxConfig field name corresponding to the YAML key.
@@ -207,18 +204,13 @@ def _coerce_value(key: str, raw: Any) -> Any:
     """
     dt_keys = {"initial_cycle_start", "final_cycle_start"}
     if key in dt_keys and isinstance(raw, str):
-        return _parse_datetime_str(raw)
+        return _parse_datetime_string(raw)
     return raw
 
 
-def load_config(yaml_path: Union[str, Path]) -> ModvxConfig:
+def load_config_from_yaml(yaml_path: Union[str, Path]) -> ModvxConfig:
     """
-    Load a YAML configuration file and return a fully populated ModvxConfig instance.
-    The function reads the YAML file, coerces each recognised field to its expected Python
-    type via _coerce_value, and constructs a ModvxConfig dataclass with the merged values.
-    Unknown YAML keys are silently ignored so that user configuration files can include
-    comments or extra entries without raising errors. A FileNotFoundError is raised
-    immediately when the specified path does not exist.
+    Load a YAML configuration file and return a fully populated ModvxConfig instance. The function reads the YAML file, coerces each recognised field to its expected Python type via _coerce_value, and constructs a ModvxConfig dataclass with the merged values. Unknown YAML keys are silently ignored so that user configuration files can include comments or extra entries without raising errors. A FileNotFoundError is raised immediately when the specified path does not exist.
 
     Parameters:
         yaml_path (str or Path): Path to the YAML configuration file.
@@ -237,18 +229,14 @@ def load_config(yaml_path: Union[str, Path]) -> ModvxConfig:
     valid_fields = {f.name for f in ModvxConfig.__dataclass_fields__.values()}  # type: ignore[attr-defined]
     for key, val in raw.items():
         if key in valid_fields:
-            kwargs[key] = _coerce_value(key, val)
+            kwargs[key] = _coerce_config_value(key, val)
 
     return ModvxConfig(**kwargs)
 
 
-def merge_cli_overrides(config: ModvxConfig, overrides: Dict[str, Any]) -> ModvxConfig:
+def apply_cli_overrides(config: ModvxConfig, overrides: Dict[str, Any]) -> ModvxConfig:
     """
-    Create and return a new ModvxConfig with selected fields overridden by CLI-provided values.
-    This function is non-destructive — it copies all fields from the base configuration and
-    applies only the non-``None`` entries from *overrides*, leaving everything else unchanged.
-    Unknown keys are silently ignored so that argparse Namespace objects can be passed directly
-    without prior filtering. Type coercion is applied to datetime fields via _coerce_value.
+    Create and return a new ModvxConfig with selected fields overridden by CLI-provided values. This function is non-destructive — it copies all fields from the base configuration and applies only the non-``None`` entries from *overrides*, leaving everything else unchanged. Unknown keys are silently ignored so that argparse Namespace objects can be passed directly without prior filtering. Type coercion is applied to datetime fields via _coerce_value.
 
     Parameters:
         config (ModvxConfig): Base configuration, typically loaded from a YAML file.
@@ -264,5 +252,10 @@ def merge_cli_overrides(config: ModvxConfig, overrides: Dict[str, Any]) -> Modvx
         merged[f.name] = getattr(config, f.name)
     for key, val in overrides.items():
         if val is not None and key in valid_fields:
-            merged[key] = _coerce_value(key, val)
+            merged[key] = _coerce_config_value(key, val)
     return ModvxConfig(**merged)
+
+
+# Note: legacy short-name aliases were removed — callers should use the
+# descriptive names: `_parse_datetime_string`, `_coerce_config_value`,
+# `load_config_from_yaml`, and `apply_cli_overrides`.

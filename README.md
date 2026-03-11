@@ -24,7 +24,7 @@ conda create -n modvx python=3.10 -y
 conda activate modvx
 
 # Install dependencies
-conda install -y -c conda-forge numpy scipy xarray matplotlib pyyaml
+conda install -y -c conda-forge numpy scipy xarray matplotlib pyyaml pytest mpi4py netCDF4 ruff black pluggy coverage pytest-cov cartopy
 
 # Install modvx in development mode
 git clone https://github.com/mrixlam/modvx.git
@@ -198,7 +198,7 @@ pytest tests/
 Run tests with coverage report:
 
 ```bash
-pytest --cov=modvx tests/
+pytest --cov=modvx tests/ --cov-report=term-missing
 ```
 
 ## License

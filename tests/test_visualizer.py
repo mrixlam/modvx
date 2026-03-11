@@ -1,4 +1,16 @@
-"""Tests for modvx.visualizer — plot generation and option discovery."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx visualizer module.
+
+This module contains unit and integration tests for the Visualizer class, verifying CSV-driven plotting, metric labeling, and output generation. It exercises the end-to-end PNG creation pipeline, checks module-level constants, and validates behaviour for empty CSV directories and bounded/unbounded metric handling. Fixtures produce realistic CSV inputs and temporary output directories so plotting can be tested without external data dependencies.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 from __future__ import annotations
 
@@ -370,15 +382,11 @@ class TestPlotHorizontalMap:
         Returns:
             None
         """
-        try:
-            import cartopy  # noqa: F401
-        except ImportError:
-            pytest.skip("cartopy not installed")
+        pytest.importorskip("cartopy")
 
         cfg = ModvxConfig(base_dir=str(tmp_path), plot_dir="plots")
         viz = Visualizer(cfg)
         field = xr.DataArray(
-            np.random.rand(10, 20),
             dims=["latitude", "longitude"],
             coords={
                 "latitude": np.linspace(-5, 5, 10),
@@ -397,10 +405,7 @@ class TestPlotHorizontalMap:
         Returns:
             None
         """
-        try:
-            import cartopy  # noqa: F401
-        except ImportError:
-            pytest.skip("cartopy not installed")
+        pytest.importorskip("cartopy")
 
         cfg = ModvxConfig(base_dir=str(tmp_path), plot_dir="plots")
         viz = Visualizer(cfg)

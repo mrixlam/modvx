@@ -1,4 +1,16 @@
-"""Tests for modvx.data_validator — grid preparation pipeline."""
+#!/usr/bin/env python3
+
+"""
+Tests for modvx.data_validator — grid preparation pipeline.
+
+This module contains unit tests for the DataValidator class, which performs the critical task of preparing forecast and observation data for verification. The tests cover each step of the grid preparation pipeline. 
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 
@@ -22,7 +34,7 @@ def dv() -> DataValidator:
 
 
 class TestPrepareObsCoords:
-    """Tests for the prepare_observation_coordinates static method covering coordinate renaming and longitude normalization."""
+    """Tests for the standardize_observation_coordinates static method covering coordinate renaming and longitude normalization."""
 
     def test_renames_lat_lon(self) -> None:
         """
@@ -36,7 +48,7 @@ class TestPrepareObsCoords:
             dims=["lat", "lon"],
             coords={"lat": [10, 20, 30], "lon": [100, 110, 120, 130]},
         )
-        result = DataValidator.prepare_observation_coordinates(da)
+        result = DataValidator.standardize_observation_coordinates(da)
         assert "latitude" in result.dims
         assert "longitude" in result.dims
 
@@ -52,12 +64,12 @@ class TestPrepareObsCoords:
             dims=["lat", "lon"],
             coords={"lat": [0, 1], "lon": [-10, 0, 10]},
         )
-        result = DataValidator.prepare_observation_coordinates(da)
+        result = DataValidator.standardize_observation_coordinates(da)
         assert float(result.longitude.min()) >= 0
 
 
 class TestMaskExtent:
-    """Tests for get_mask_extent verifying bounding-box extraction from binary mask DataArrays."""
+    """Tests for compute_mask_extent verifying bounding-box extraction from binary mask DataArrays."""
 
     def test_valid_extent(self) -> None:
         """
@@ -71,7 +83,7 @@ class TestMaskExtent:
             dims=["latitude", "longitude"],
             coords={"latitude": [10, 20], "longitude": [100, 110, 120]},
         )
-        lat_min, lat_max, lon_min, lon_max = DataValidator.get_mask_extent(mask)
+        lat_min, lat_max, lon_min, lon_max = DataValidator.compute_mask_extent(mask)
         assert lat_min == 10
         assert lat_max == 20
         assert lon_min == 110
@@ -90,11 +102,11 @@ class TestMaskExtent:
             coords={"latitude": [0, 1], "longitude": [0, 1, 2]},
         )
         with pytest.raises(ValueError, match="No valid points"):
-            DataValidator.get_mask_extent(mask)
+            DataValidator.compute_mask_extent(mask)
 
 
 class TestClipObservations:
-    """Tests for the clip_observations method verifying spatial subsetting and buffer expansion behavior."""
+    """Tests for the clip_observation_to_buffer method verifying spatial subsetting and buffer expansion behavior."""
 
     def test_clip_with_buffer(self, dv: DataValidator) -> None:
         """
@@ -114,14 +126,14 @@ class TestClipObservations:
                 "longitude": np.arange(0.5, 360.5, 1.0),
             },
         )
-        clipped = dv.clip_observations(obs, 10, 20, 100, 110)
+        clipped = dv.clip_observation_to_buffer(obs, 10, 20, 100, 110)
         # Should include buffer (default 1°)
         assert float(clipped.latitude.min()) <= 10
         assert float(clipped.latitude.max()) >= 20
 
 
 class TestRegrid:
-    """Tests for regrid_to_target covering interpolation to observation grids and fixed-resolution common grids."""
+    """Tests for regrid_to_common_grid covering interpolation to observation grids and fixed-resolution common grids."""
 
     def test_obs_target(self) -> None:
         """
@@ -140,7 +152,7 @@ class TestRegrid:
             dims=["latitude", "longitude"],
             coords={"latitude": [1, 2, 3], "longitude": [1, 2, 3]},
         )
-        fr, or_ = DataValidator.regrid_to_target(fcst, obs, "obs", 0, 4, 0, 4)
+        fr, or_ = DataValidator.regrid_to_common_grid(fcst, obs, "obs", 0, 4, 0, 4)
         assert fr.shape == obs.shape
 
     def test_numeric_resolution(self) -> None:
@@ -160,12 +172,12 @@ class TestRegrid:
             dims=["latitude", "longitude"],
             coords={"latitude": np.arange(10), "longitude": np.arange(10)},
         )
-        fr, or_ = DataValidator.regrid_to_target(fcst, obs, 2.0, 0, 8, 0, 8)
+        fr, or_ = DataValidator.regrid_to_common_grid(fcst, obs, 2.0, 0, 8, 0, 8)
         assert fr.shape == or_.shape
 
 
 class TestApplyMask:
-    """Tests for apply_verification_mask verifying NaN assignment outside active mask cells and value preservation inside."""
+    """Tests for apply_domain_mask verifying NaN assignment outside active mask cells and value preservation inside."""
 
     def test_nan_outside_mask(self) -> None:
         """
@@ -184,7 +196,7 @@ class TestApplyMask:
             dims=["latitude", "longitude"],
             coords={"latitude": [0, 1, 2], "longitude": [0, 1, 2]},
         )
-        fm, om = DataValidator.apply_verification_mask(
+        fm, om = DataValidator.apply_domain_mask(
             field, field, mask, "obs", 0, 2, 0, 2,
         )
         # Masked-out positions should be NaN
@@ -239,7 +251,7 @@ class TestRegridToTargetFcst:
         dv = DataValidator(ModvxConfig(target_resolution="obs"))
         fcst = self._make_grid(step=1.0)
         obs = self._make_grid(step=0.5)
-        f_r, o_r = dv.regrid_to_target(fcst, obs, "fcst", 0.0, 5.0, 0.0, 5.0)
+        f_r, o_r = dv.regrid_to_common_grid(fcst, obs, "fcst", 0.0, 5.0, 0.0, 5.0)
         assert f_r.shape == fcst.shape
 
     def test_regrid_to_target_numeric(self) -> None:
@@ -252,7 +264,7 @@ class TestRegridToTargetFcst:
         dv = DataValidator(ModvxConfig(target_resolution="obs"))
         fcst = self._make_grid(step=1.0)
         obs = self._make_grid(step=0.5)
-        f_r, o_r = dv.regrid_to_target(fcst, obs, 2.0, 0.0, 5.0, 0.0, 5.0)
+        f_r, o_r = dv.regrid_to_common_grid(fcst, obs, 2.0, 0.0, 5.0, 0.0, 5.0)
         assert f_r.shape == o_r.shape
 
 
@@ -279,7 +291,7 @@ class TestApplyVerificationMaskNumeric:
         )
         mask.values[0, :] = 0.0
 
-        f_m, o_m = DataValidator.apply_verification_mask(
+        f_m, o_m = DataValidator.apply_domain_mask(
             fcst, obs, mask, 1.0, 0.0, 5.0, 0.0, 5.0,
         )
         assert np.isnan(f_m.values[0, 0])

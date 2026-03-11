@@ -1,4 +1,16 @@
-"""Tests for modvx.perf_metrics — FSS pipeline and contingency-table metrics."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx performance metrics.
+
+This module contains a comprehensive suite of tests for the methods in the PerfMetrics class, which implements the core logic for computing FSS and contingency-table-based metrics. The tests cover a range of scenarios including perfect forecasts, random fields, NaN handling, and edge cases for each metric. By using synthetic data with known properties, these tests verify that the mathematical computations are correct and that the methods behave as expected under various conditions.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 import math

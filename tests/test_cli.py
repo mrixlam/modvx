@@ -1,4 +1,16 @@
-"""Tests for modvx.cli — argument parsing and subcommand dispatch."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx command-line interface.
+
+This module contains unit tests for the command-line interface defined in modvx.cli. The tests cover argument parsing, configuration resolution, logging setup, and the dispatch of subcommands to their respective handler functions. Mocking is used to isolate the CLI logic from the underlying TaskManager, ParallelProcessor, FileManager, and Visualizer implementations, allowing for focused testing of the CLI behaviour without side effects.    
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 from __future__ import annotations
 
@@ -9,32 +21,32 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from modvx.cli import (
-    _add_common_args,
-    _cmd_run,
-    _resolve_config,
-    _setup_logging,
+    add_shared_cli_args,
+    handle_run_subcommand,
+    resolve_config_from_namespace,
+    configure_root_logging,
     main,
 )
 from modvx.config import ModvxConfig
 
 
 # -----------------------------------------------------------------------
-# _setup_logging
+# configure_root_logging
 # -----------------------------------------------------------------------
 
 class TestSetupLogging:
-    """Tests for the _setup_logging helper that configures root logging."""
+    """Tests for the configure_root_logging helper that configures root logging."""
 
     def test_info_level_by_default(self) -> None:
         """
-        Verify that logging is configured at INFO level when verbose is False in the config. This test calls _setup_logging with a minimal config that has verbose disabled and checks the root logger's effective level. INFO is the expected default so that pipeline progress messages are visible without the additional DEBUG diagnostic output.
+        Verify that logging is configured at INFO level when verbose is False in the config. This test calls configure_root_logging with a minimal config that has verbose disabled and checks the root logger's effective level. INFO is the expected default so that pipeline progress messages are visible without the additional DEBUG diagnostic output.
 
         Returns:
             None
         """
         import logging
         cfg = ModvxConfig(verbose=False)
-        _setup_logging(cfg)
+        configure_root_logging(cfg)
         assert logging.getLogger().level == logging.INFO
 
     def test_debug_level_when_verbose(self) -> None:
@@ -46,7 +58,7 @@ class TestSetupLogging:
         """
         import logging
         cfg = ModvxConfig(verbose=True)
-        _setup_logging(cfg)
+        configure_root_logging(cfg)
         assert logging.getLogger().level == logging.DEBUG
 
 
@@ -65,7 +77,7 @@ class TestAddCommonArgs:
             None
         """
         parser = argparse.ArgumentParser()
-        _add_common_args(parser)
+        add_shared_cli_args(parser)
         args = parser.parse_args(["-c", "my.yaml", "--verbose"])
         assert args.config == "my.yaml"
         assert args.verbose is True
@@ -78,7 +90,7 @@ class TestAddCommonArgs:
             None
         """
         parser = argparse.ArgumentParser()
-        _add_common_args(parser)
+        add_shared_cli_args(parser)
         args = parser.parse_args([])
         assert args.config is None
         assert args.verbose is None
@@ -105,7 +117,7 @@ class TestResolveConfig:
             forecast_length_hours=None, verbose=None, save_intermediate=None,
             enable_logs=None,
         )
-        cfg = _resolve_config(ns)
+        cfg = resolve_config_from_namespace(ns)
         assert isinstance(cfg, ModvxConfig)
 
     def test_overrides_applied(self) -> None:
@@ -122,7 +134,7 @@ class TestResolveConfig:
             forecast_length_hours=None, verbose=True, save_intermediate=None,
             enable_logs=None,
         )
-        cfg = _resolve_config(ns)
+        cfg = resolve_config_from_namespace(ns)
         assert cfg.experiment_name == "test_exp"
         assert cfg.forecast_step_hours == 6
         assert cfg.verbose is True
@@ -146,7 +158,7 @@ class TestResolveConfig:
             cycle_interval_hours=None, forecast_length_hours=None,
             verbose=None, save_intermediate=None, enable_logs=None,
         )
-        cfg = _resolve_config(ns)
+        cfg = resolve_config_from_namespace(ns)
         assert cfg.experiment_name == "yaml_exp"
         assert cfg.forecast_step_hours == 3
 
@@ -373,7 +385,7 @@ class TestCliTargetResolutionValueError:
         with patch("modvx.task_manager.TaskManager") as MockTM, \
              patch("modvx.parallel.ParallelProcessor") as MockPP:
             MockPP.return_value.run.return_value = None
-            _cmd_run(args)
+            handle_run_subcommand(args)
         MockTM.assert_called_once()
 
 

@@ -1,13 +1,20 @@
+#!/usr/bin/env python3
+
 """
-Visualisation module for modvx.
+Visualisation helpers for modvx plotting utilities.
 
-``Visualizer`` produces:
+This module provides the :class:`Visualizer` class and supporting helpers to
+produce verification plots from accumulated CSV results. It supports
+metric-vs-lead-time comparison plots, metric-difference plots (experiment −
+control), Cartopy horizontal maps for gridded fields, and batch generation
+across domains, thresholds and windows. By default plot outputs are written
+as PNG files to the configured plot directory.
 
-* **Metric vs lead-time** comparison plots across experiments for FSS, POD,
-  FAR, CSI, FBIAS, and ETS.
-* **Metric difference** plots (experiment − control).
-* **Cartopy horizontal maps** of precipitation / binary masks (optional).
-* **Batch generation** of all (metric × domain × threshold × window) combos.
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ import logging
 import os
 from itertools import product
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, cast, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -45,18 +52,174 @@ _BOUNDED_METRICS = {"fss", "pod", "far", "csi"}
 
 class Visualizer:
     """
-    Generate FSS verification plots from accumulated CSV result files.
-    Supported output types include FSS-vs-lead-time comparison plots across experiments,
-    FSS difference plots (experiment minus control), optional Cartopy horizontal maps of
-    precipitation fields, and batch generation of all (domain × threshold × window) combos.
-    All plot outputs are saved as high-resolution PNG files to the configured plot directory.
+    The :class:`Visualizer` centralises plotting logic for verification metrics computed from per-experiment CSV outputs. It supports per-metric comparison plots across experiments, experiment-minus-control difference plots, optional Cartopy-based horizontal maps of gridded fields, and batch generation of combinations discovered in CSV data. All outputs are saved as high-resolution PNG files in the configured plotting directory.
 
     Parameters:
-        config (ModvxConfig): Run configuration with directory paths and experiment settings.
+        config (ModvxConfig): Run configuration providing directory paths
+            and experiment settings used by plotting methods.
     """
 
     def __init__(self, config: ModvxConfig) -> None:
         self.config = config
+
+    # ------------------------------------------------------------------
+    # Shared plot helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_plot_dirs(
+        self,
+        csv_dir: Optional[str],
+        output_dir: Optional[str],
+    ) -> Tuple[str, str]:
+        """
+        This helper determines the CSV input directory and the output directory for plots by falling back to values defined in the associated :class:`ModvxConfig` when explicit arguments are not provided. It also ensures the resolved output directory exists on disk so callers may safely write files to it.
+
+        Parameters:
+            csv_dir (str, optional): Optional CSV directory path to override
+                the configuration value. If ``None`` the config value is used.
+            output_dir (str, optional): Optional output directory path to
+                override the configuration value. If ``None`` the config
+                value is used.
+
+        Returns:
+            Tuple[str, str]: A tuple ``(resolved_csv, resolved_out)`` with both
+            paths as resolved strings.
+        """
+        cfg = self.config
+        resolved_csv = csv_dir or cfg.resolve_path(cfg.csv_dir)
+        resolved_out = output_dir or cfg.resolve_path(cfg.plot_dir)
+        os.makedirs(resolved_out, exist_ok=True)
+        return resolved_csv, resolved_out
+
+    @staticmethod
+    def _filter_df(
+        results_df: pd.DataFrame,
+        domain: str,
+        thresh_val: float,
+        window_val: int,
+    ) -> pd.DataFrame:
+        """
+        This static helper applies boolean filtering on the provided DataFrame to select rows that match the specified domain name, percentile threshold, and neighbourhood window size. It preserves the original row ordering and returns a DataFrame containing only the matching rows (may be empty).
+
+        Parameters:
+            results_df (pandas.DataFrame): Input results DataFrame containing columns
+                ``domain``, ``thresh``, ``window`` and metric columns.
+            domain (str): Domain name to filter (for example, ``'GLOBAL'``).
+            thresh_val (float): Threshold percentile value used to filter
+                rows (e.g. ``90.0``).
+            window_val (int): Neighbourhood window size used to filter rows
+                (e.g. ``3``).
+
+        Returns:
+            pandas.DataFrame: Filtered DataFrame containing only matching rows.
+        """
+        mask = (
+            (results_df["domain"] == domain)
+            & (results_df["thresh"] == thresh_val)
+            & (results_df["window"] == window_val)
+        )
+        return cast(pd.DataFrame, results_df.loc[mask])
+
+    @staticmethod
+    def _aggregate_metric(
+        csv_file: Path,
+        domain: str,
+        thresh_val: float,
+        window_val: int,
+        metric: str,
+    ) -> Optional["pd.Series[float]"]:
+        """
+        This helper reads a single per-experiment CSV file, validates the requested metric column exists, filters rows to the specified domain, threshold and window, and computes the mean metric value for each lead time. It returns a :class:`pandas.Series` indexed by ``leadTime`` with float values, or ``None`` if the metric column is missing or no rows match the filter (warnings are logged in those cases).
+
+        Parameters:
+            csv_file (pathlib.Path): Path to the experiment CSV file to read.
+            domain (str): Domain name to filter (e.g., ``'GLOBAL'``).
+            thresh_val (float): Threshold percentile value used to filter rows.
+            window_val (int): Neighbourhood window size used to filter rows.
+            metric (str): Column name of the metric to aggregate (e.g., ``'fss'``).
+
+        Returns:
+            Optional[pandas.Series[float]]: Series of mean metric values indexed
+                by ``leadTime`` (sorted), or ``None`` when the metric is not
+                present or no rows match the filter criteria.
+        """
+        results_df = pd.read_csv(csv_file)
+        if metric not in results_df.columns:
+            logger.warning("Metric '%s' not in %s — skipping", metric, csv_file.name)
+            return None
+        filtered_df = Visualizer._filter_df(results_df, domain, thresh_val, window_val)
+        if filtered_df.empty:
+            logger.warning(
+                "No data for %s with domain=%s thresh=%s win=%s",
+                csv_file.stem, domain, thresh_val, window_val,
+            )
+            return None
+        return cast("pd.Series[float]", filtered_df.groupby("leadTime")[metric].mean().sort_index())
+
+    @staticmethod
+    def _set_y_limits(ax: "Any", values_list: list[float], metric: str) -> None:
+        """
+        This function computes sensible y-axis limits from the finite numeric values in ``values``. A small padding is added to the data range to avoid clipping, and metrics known to be bounded (for example FSS, POD, FAR, CSI) are clamped to the interval [0, 1]. If ``values`` contains no finite numbers the function returns without modifying the axis.
+
+        Parameters:
+            ax (Any): Matplotlib Axes-like object on which to set y-limits.
+            values (list of float): Sequence of metric values used to
+                determine limits.
+            metric (str): Metric name used to determine whether to clamp to
+                the [0, 1] interval.
+
+        Returns:
+            None: The function modifies the axis in-place and returns None.
+        """
+        arr = np.asarray(values_list, dtype=float)
+        valid = arr[np.isfinite(arr)]
+        if len(valid) == 0:
+            return
+        rng = float(valid.max() - valid.min())
+        pad = rng * 0.1 if rng > 0 else 0.05
+        ymin = float(valid.min()) - pad
+        ymax = float(valid.max()) + pad
+        if metric in _BOUNDED_METRICS:
+            ymin = max(0.0, ymin)
+            ymax = min(1.0, ymax)
+        ax.set_ylim(ymin, ymax)
+
+    @staticmethod
+    def _finalise_plot(
+        fig: "Any",
+        ax: "Any",
+        xlabel: str,
+        ylabel: str,
+        title: str,
+        out_path: str,
+    ) -> str:
+        """
+        This helper applies axis labels, title, legend and grid styling, tightens the layout, writes the figure to ``out_path`` at high resolution, and closes the figure to release resources. It returns the path to the saved file for callers that wish to log or further manipulate the output path.
+
+        Parameters:
+            fig (Any): Matplotlib Figure object to finalize and save.
+            ax (Any): Matplotlib Axes object associated with the figure.
+            xlabel (str): Label for the x-axis.
+            ylabel (str): Label for the y-axis.
+            title (str): Plot title string.
+            out_path (str): Destination file path for the saved PNG.
+
+        Returns:
+            str: The path to the saved PNG file (``out_path``).
+        """
+        import matplotlib.pyplot as plt
+
+        ax.set_xlabel(xlabel, fontsize=14, fontweight="bold")
+        ax.set_ylabel(ylabel, fontsize=14, fontweight="bold")
+        ax.set_title(title, fontsize=16, fontweight="bold", pad=20)
+        if ax.get_legend_handles_labels()[1]:
+            ax.legend(loc="best", fontsize=10, framealpha=0.9)
+        ax.grid(True, alpha=0.3, linestyle="--")
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        return out_path
 
     # ------------------------------------------------------------------
     # FSS vs lead-time
@@ -72,106 +235,62 @@ class Visualizer:
         metric: str = "fss",
     ) -> Optional[str]:
         """
-        Plot a mean verification metric versus lead time for every experiment found in the
-        CSV directory. Each CSV file is treated as one experiment, and mean metric values
-        are computed per lead time after filtering to the specified domain, threshold, and
-        window combination. Supported metrics are fss, pod, far, csi, fbias, and ets. The
-        resulting lines are colour-coded by experiment and overlaid in a single figure.
-        Returns None when no CSV files or matching data are found.
+        This method reads per-experiment CSV files from ``csv_dir``, filters rows to the specified ``domain``, ``thresh`` and ``window``, computes the mean metric per lead time, and overlays a line for each experiment in a single figure. The figure is saved to ``output_dir`` using a filename convention that encodes metric, domain, threshold and window. If no CSV files are present or no matching rows are found the method returns ``None``.
 
         Parameters:
-            domain (str): Verification domain name to filter by (e.g. ``"GLOBAL"``).
-            thresh (str): Percentile threshold string to filter by (e.g. ``"90"``).
-            window (str): Neighbourhood window size string to filter by (e.g. ``"3"``).
-            csv_dir (str, optional): Directory containing per-experiment CSV files;
-                defaults to the configured csv_dir.
+            domain (str): Verification domain name to filter by (e.g. "GLOBAL").
+            thresh (str): Percentile threshold string to filter by (e.g. "90").
+            window (str): Neighbourhood window size string to filter by (e.g. "3").
+            csv_dir (str, optional): Directory containing per-experiment CSV
+                files; defaults to the configured csv_dir when ``None``.
             output_dir (str, optional): Directory where the PNG will be saved;
-                defaults to the configured plot_dir.
-            metric (str): Column name of the metric to plot (default ``"fss"``).
+                defaults to the configured plot_dir when ``None``.
+            metric (str): Column name of the metric to plot (default "fss").
 
         Returns:
-            str or None: Path to the saved PNG file, or None if no data was found.
+            Optional[str]: Path to the saved PNG file, or ``None`` when no
+                CSV files or matching data are found.
         """
         import matplotlib.pyplot as plt
 
-        cfg = self.config
-        csv_dir = csv_dir or cfg.resolve_path(cfg.csv_dir)
-        output_dir = output_dir or cfg.resolve_path(cfg.plot_dir)
-        os.makedirs(output_dir, exist_ok=True)
-
+        csv_dir, output_dir = self._resolve_plot_dirs(csv_dir, output_dir)
         csv_files = sorted(Path(csv_dir).glob("*.csv"))
         if not csv_files:
             logger.warning("No CSV files found in %s", csv_dir)
             return None
 
+        thresh_val = float(thresh)
+        window_val = int(window)
         metric_label = _METRIC_LABELS.get(metric, metric.upper())
 
         fig, ax = plt.subplots(figsize=(12, 7))
-        cmap = plt.get_cmap("tab10")
-        colors = cmap(np.linspace(0, 1, len(csv_files)))
-        all_vals: list[float] = []
+        colors = plt.get_cmap("tab10")(np.linspace(0, 1, len(csv_files)))
+        all_values: list[float] = []
 
-        thresh_val = float(thresh)
-        window_val = int(window)
-
-        for idx, csv_file in enumerate(csv_files):
-            df = pd.read_csv(csv_file)
-            experiment = csv_file.stem
-
-            if metric not in df.columns:
-                logger.warning("Metric '%s' not in %s — skipping", metric, csv_file.name)
+        for file_idx, csv_file in enumerate(csv_files):
+            experiment_series = self._aggregate_metric(csv_file, domain, thresh_val, window_val, metric)
+            if experiment_series is None:
                 continue
-
-            filtered = df[
-                (df["domain"] == domain)
-                & (df["thresh"] == thresh_val)
-                & (df["window"] == window_val)
-            ]
-            if filtered.empty:
-                logger.warning("No data for %s with domain=%s thresh=%s win=%s", experiment, domain, thresh, window)
-                continue
-
-            grouped = filtered.groupby("leadTime")[metric].agg(["mean", "std", "count"]).sort_index()
-            lead_times = grouped.index.to_numpy()
-            mean_vals = grouped["mean"].to_numpy(dtype=float)
-
-            all_vals.extend(mean_vals.tolist())
+            mean_values = experiment_series.to_numpy(dtype=float)
+            all_values.extend(mean_values.tolist())
             ax.plot(
-                lead_times, mean_vals,
+                experiment_series.index.to_numpy(), mean_values,
                 marker="o", linewidth=2.5, markersize=8,
-                label=experiment, color=colors[idx],
+                label=csv_file.stem, color=colors[file_idx],
             )
 
-        ax.set_xlabel("Lead Time (hours)", fontsize=14, fontweight="bold")
-        ax.set_ylabel(metric_label, fontsize=14, fontweight="bold")
-        ax.set_title(
-            f"{metric_label} vs Lead Time | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
-            fontsize=16, fontweight="bold", pad=20,
-        )
-        if ax.get_legend_handles_labels()[1]:
-            ax.legend(loc="best", fontsize=10, framealpha=0.9)
-        ax.grid(True, alpha=0.3, linestyle="--")
-
-        if all_vals:
-            arr = np.asarray(all_vals, dtype=float)
-            valid = arr[np.isfinite(arr)]
-            if len(valid) > 0:
-                rng = float(valid.max() - valid.min())
-                pad = rng * 0.1 if rng > 0 else 0.05
-                ymin = float(valid.min()) - pad
-                ymax = float(valid.max()) + pad
-                if metric in _BOUNDED_METRICS:
-                    ymin = max(0.0, ymin)
-                    ymax = min(1.0, ymax)
-                ax.set_ylim(ymin, ymax)
-
-        ax.tick_params(labelsize=12)
-        fig.tight_layout()
+        if all_values:
+            self._set_y_limits(ax, all_values, metric)
 
         fname = f"{metric}_leadtime_{domain}_thresh{thresh}percent_window{window}.png"
         out = os.path.join(output_dir, fname)
-        fig.savefig(out, dpi=300, bbox_inches="tight")
-        plt.close(fig)
+        self._finalise_plot(
+            fig, ax,
+            xlabel="Lead Time (hours)",
+            ylabel=metric_label,
+            title=f"{metric_label} vs Lead Time | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
+            out_path=out,
+        )
         logger.info("Saved plot → %s", out)
         return out
 
@@ -190,35 +309,27 @@ class Visualizer:
         metric: str = "fss",
     ) -> Optional[str]:
         """
-        Plot metric difference (experiment minus control) versus lead time for all experiments.
-        The control experiment's mean metric value is subtracted from each other experiment's
-        mean at common lead times, producing signed difference curves. A horizontal zero line
-        provides a visual reference for neutral skill relative to the control. Supported metrics
-        are fss, pod, far, csi, fbias, and ets. Returns None when no CSV files are found or
-        when the control experiment CSV is missing.
+        This method computes the mean metric per lead time for the specified control experiment and then computes signed differences for every other experiment at common lead times. Difference curves are plotted and saved as a PNG file. If CSVs are missing or the control file has no matching rows the method returns ``None``.
 
         Parameters:
-            control_experiment (str): Name of the baseline experiment (its CSV must exist
-                in csv_dir).
-            domain (str): Verification domain name to filter by (e.g. ``"GLOBAL"``).
-            thresh (str): Percentile threshold string to filter by (e.g. ``"90"``).
-            window (str): Neighbourhood window size string to filter by (e.g. ``"3"``).
-            csv_dir (str, optional): Directory containing per-experiment CSV files;
-                defaults to the configured csv_dir.
+            control_experiment (str): Name of the baseline experiment (its
+                CSV file must exist in ``csv_dir``).
+            domain (str): Verification domain name to filter by (e.g. "GLOBAL").
+            thresh (str): Percentile threshold string to filter by (e.g. "90").
+            window (str): Neighbourhood window size string to filter by (e.g. "3").
+            csv_dir (str, optional): Directory containing per-experiment CSV
+                files; defaults to the configured csv_dir when ``None``.
             output_dir (str, optional): Directory where the PNG will be saved;
-                defaults to the configured plot_dir.
-            metric (str): Column name of the metric to plot (default ``"fss"``).
+                defaults to the configured plot_dir when ``None``.
+            metric (str): Column name of the metric to plot (default "fss").
 
         Returns:
-            str or None: Path to the saved difference plot PNG, or None if data was not found.
+            Optional[str]: Path to the saved difference plot PNG, or ``None``
+                when the control file is missing or contains no matching data.
         """
         import matplotlib.pyplot as plt
 
-        cfg = self.config
-        csv_dir = csv_dir or cfg.resolve_path(cfg.csv_dir)
-        output_dir = output_dir or cfg.resolve_path(cfg.plot_dir)
-        os.makedirs(output_dir, exist_ok=True)
-
+        csv_dir, output_dir = self._resolve_plot_dirs(csv_dir, output_dir)
         csv_files = sorted(Path(csv_dir).glob("*.csv"))
         if not csv_files:
             logger.warning("No CSV files found in %s", csv_dir)
@@ -229,63 +340,42 @@ class Visualizer:
         window_val = int(window)
 
         # Load control
-        ctrl_path = Path(csv_dir) / f"{control_experiment}.csv"
-        if not ctrl_path.exists():
-            logger.warning("Control CSV not found: %s", ctrl_path)
+        control_path = Path(csv_dir) / f"{control_experiment}.csv"
+        if not control_path.exists():
+            logger.warning("Control CSV not found: %s", control_path)
             return None
-        ctrl_df = pd.read_csv(ctrl_path)
-        ctrl_filt = ctrl_df[
-            (ctrl_df["domain"] == domain)
-            & (ctrl_df["thresh"] == thresh_val)
-            & (ctrl_df["window"] == window_val)
-        ]
-        if ctrl_filt.empty:
+        control_series = self._aggregate_metric(control_path, domain, thresh_val, window_val, metric)
+        if control_series is None:
             logger.warning("No control data for domain=%s thresh=%s win=%s", domain, thresh, window)
             return None
-        ctrl_mean = ctrl_filt.groupby("leadTime")[metric].mean()
 
         fig, ax = plt.subplots(figsize=(12, 7))
-        cmap = plt.get_cmap("tab10")
-        colors = cmap(np.linspace(0, 1, len(csv_files)))
+        colors = plt.get_cmap("tab10")(np.linspace(0, 1, len(csv_files)))
 
-        for idx, csv_file in enumerate(csv_files):
-            experiment = csv_file.stem
-            if experiment == control_experiment:
+        for file_idx, csv_file in enumerate(csv_files):
+            if csv_file.stem == control_experiment:
                 continue
-            df = pd.read_csv(csv_file)
-            filt = df[
-                (df["domain"] == domain)
-                & (df["thresh"] == thresh_val)
-                & (df["window"] == window_val)
-            ]
-            if filt.empty:
+            experiment_series = self._aggregate_metric(csv_file, domain, thresh_val, window_val, metric)
+            if experiment_series is None:
                 continue
-            exp_mean = filt.groupby("leadTime")[metric].mean()
-            common = ctrl_mean.index.intersection(exp_mean.index)
-            diff = exp_mean.loc[common] - ctrl_mean.loc[common]
+            common_index = control_series.index.intersection(experiment_series.index)
+            difference_series = experiment_series.loc[common_index] - control_series.loc[common_index]
             ax.plot(
-                common.to_numpy(), diff.to_numpy(),
+                common_index.to_numpy(), difference_series.to_numpy(dtype=float),
                 marker="o", linewidth=2.5, markersize=8,
-                label=experiment, color=colors[idx],
+                label=csv_file.stem, color=colors[file_idx],
             )
 
         ax.axhline(0, color="k", linestyle="--", linewidth=0.8)
-        ax.set_xlabel("Lead Time (hours)", fontsize=14, fontweight="bold")
-        ax.set_ylabel(f"Δ{metric_label} (exp − {control_experiment})", fontsize=14, fontweight="bold")
-        ax.set_title(
-            f"{metric_label} Difference | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
-            fontsize=16, fontweight="bold", pad=20,
-        )
-        if ax.get_legend_handles_labels()[1]:
-            ax.legend(loc="best", fontsize=10, framealpha=0.9)
-        ax.grid(True, alpha=0.3, linestyle="--")
-        ax.tick_params(labelsize=12)
-        fig.tight_layout()
-
         fname = f"{metric}_diff_{domain}_thresh{thresh}percent_window{window}.png"
         out = os.path.join(output_dir, fname)
-        fig.savefig(out, dpi=300, bbox_inches="tight")
-        plt.close(fig)
+        self._finalise_plot(
+            fig, ax,
+            xlabel="Lead Time (hours)",
+            ylabel=f"Δ{metric_label} (exp − {control_experiment})",
+            title=f"{metric_label} Difference | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
+            out_path=out,
+        )
         logger.info("Saved difference plot → %s", out)
         return out
 
@@ -301,28 +391,25 @@ class Visualizer:
         **kwargs,
     ) -> Optional[str]:
         """
-        Plot a latitude-longitude field on a Cartopy PlateCarree map projection.
-        Coastlines, country borders, and grid lines with labels are added automatically.
-        The cartopy library must be installed; the function returns None and logs a warning
-        when it is not available rather than raising an ImportError. The output is saved
-        as a PNG at the specified path or to the default plot directory.
+        This method displays a two-dimensional :class:`xarray.DataArray` on a PlateCarree map with coastline, country borders and gridlines. If Cartopy is not installed the function logs a warning and returns ``None`` rather than raising an :class:`ImportError`. The figure is saved to ``output_path`` or the configured plot directory and the saved path is returned.
 
         Parameters:
-            field (xr.DataArray): Two-dimensional precipitation or mask field with latitude
-                and longitude coordinates.
+            field (xarray.DataArray): Two-dimensional precipitation or mask
+                field with latitude and longitude coordinates.
             title (str): Title string for the plot (default: empty string).
-            output_path (str, optional): Full path for the output PNG file; defaults to
-                ``<plot_dir>/horizontal_map.png``.
-            **kwargs: Additional keyword arguments passed to the xarray plot method
-                (e.g. ``cmap``).
+            output_path (str, optional): Full path for the output PNG file;
+                defaults to ``<plot_dir>/horizontal_map.png`` when ``None``.
+            **kwargs: Additional keyword arguments passed to the xarray plot
+                method (for example ``cmap``).
 
         Returns:
-            str or None: Path to the saved PNG file, or None if cartopy is not installed.
+            Optional[str]: Path to the saved PNG file, or ``None`` if cartopy
+                is not installed.
         """
         try:
-            import cartopy.crs as ccrs
-            import cartopy.feature as cfeature
-            from cartopy.mpl.geoaxes import GeoAxes
+            import cartopy.crs as ccrs  # type: ignore[import-untyped]
+            import cartopy.feature as cfeature  # type: ignore[import-untyped]
+            from cartopy.mpl.geoaxes import GeoAxes  # type: ignore[import-untyped]
         except ImportError:
             logger.warning("cartopy not installed — skipping horizontal map")
             return None
@@ -368,40 +455,32 @@ class Visualizer:
         metrics: Optional[List[str]] = None,
     ) -> int:
         """
-        Generate metric-vs-leadtime plots for every (metric, domain, threshold, window)
-        combination found in CSV data. By default all six metrics (fss, pod, far, csi, fbias,
-        ets) are plotted. The unique domains, thresholds, and windows are discovered by reading
-        the first available CSV file, then all combinations are enumerated and each plot is
-        generated via plot_fss_vs_leadtime. Failures on individual combinations are caught and
-        logged as warnings rather than aborting the batch. Returns the count of successfully
-        saved plots.
+        The method inspects the first available CSV to discover unique domains, thresholds and windows, then enumerates all combinations for the requested metrics and calls :meth:`plot_fss_vs_leadtime` for each combination. Failures for individual combinations are logged as warnings and do not abort the batch. The method returns the number of successfully generated and saved plots.
 
         Parameters:
-            csv_dir (str, optional): Directory containing per-experiment CSV files;
-                defaults to the configured csv_dir.
+            csv_dir (str, optional): Directory containing per-experiment CSV
+                files; defaults to the configured csv_dir when ``None``.
             output_dir (str, optional): Directory where plots will be saved;
-                defaults to the configured plot_dir.
-            metrics (list of str, optional): Metric names to plot; defaults to all six
-                metrics (fss, pod, far, csi, fbias, ets).
+                defaults to the configured plot_dir when ``None``.
+            metrics (list of str, optional): Metric names to plot; defaults to
+                all supported metrics when ``None``.
 
         Returns:
             int: Number of plots successfully generated and saved.
         """
-        csv_dir = csv_dir or self.config.resolve_path(self.config.csv_dir)
+        csv_dir, _ = self._resolve_plot_dirs(csv_dir, output_dir)
         csv_files = sorted(Path(csv_dir).glob("*.csv"))
         if not csv_files:
             logger.warning("No CSVs found in %s", csv_dir)
             return 0
 
+        sample_df = pd.read_csv(csv_files[0])
         if metrics is None:
-            df0 = pd.read_csv(csv_files[0])
-            metrics = [m for m in _ALL_METRICS if m in df0.columns]
-        else:
-            df0 = pd.read_csv(csv_files[0])
+            metrics = [m for m in _ALL_METRICS if m in sample_df.columns]
 
-        domains = sorted(df0["domain"].unique().tolist())
-        thresholds = sorted(df0["thresh"].unique().tolist())
-        windows = sorted(df0["window"].unique().tolist())
+        domains = sorted(sample_df["domain"].unique().tolist())
+        thresholds = sorted(sample_df["thresh"].unique().tolist())
+        windows = sorted(sample_df["window"].unique().tolist())
 
         total = len(metrics) * len(domains) * len(thresholds) * len(windows)
         logger.info(
@@ -410,16 +489,16 @@ class Visualizer:
         )
 
         count = 0
-        for met, dom, thr, win in product(metrics, domains, thresholds, windows):
+        for metric, domain, threshold, window in product(metrics, domains, thresholds, windows):
             try:
                 self.plot_fss_vs_leadtime(
-                    domain=str(dom), thresh=str(thr), window=str(win),
-                    csv_dir=csv_dir, output_dir=output_dir, metric=met,
+                    domain=str(domain), thresh=str(threshold), window=str(window),
+                    csv_dir=csv_dir, output_dir=output_dir, metric=metric,
                 )
                 count += 1
             except Exception:
                 logger.warning("Failed: metric=%s domain=%s thresh=%s win=%s",
-                               met, dom, thr, win, exc_info=True)
+                               metric, domain, threshold, window, exc_info=True)
 
         logger.info("Generated %d / %d plots", count, total)
         return count
@@ -432,28 +511,25 @@ class Visualizer:
         self, csv_dir: Optional[str] = None,
     ) -> Tuple[Optional[List[str]], Optional[List[float]], Optional[List[int]]]:
         """
-        Discover and return the unique domains, thresholds, and window sizes present in CSV data.
-        The first CSV file found in csv_dir is read to extract the set of unique values for
-        each dimension. This is used by the validate subcommand to list available plot options
-        and by generate_all_plots to enumerate the full combination set. Returns a three-tuple
-        of None values when no CSV files exist.
+        This helper reads the first CSV file in ``csv_dir`` and extracts the unique values for the ``domain``, ``thresh`` and ``window`` columns. The returned lists are sorted and typed appropriately so callers can iterate deterministically when generating plots or validating available options. If no CSV files are found the function returns a tuple of ``(None, None, None)``.
 
         Parameters:
-            csv_dir (str, optional): Directory containing per-experiment CSV files;
-                defaults to the configured csv_dir.
+            csv_dir (str, optional): Directory containing per-experiment CSV
+                files; defaults to the configured csv_dir when ``None``.
 
         Returns:
-            Tuple[list of str or None, list of float or None, list of int or None]: Tuple of
-                ``(domains, thresholds, windows)`` sorted in ascending order, or
-                ``(None, None, None)`` when no CSV files are found.
+            Tuple[Optional[List[str]], Optional[List[float]], Optional[List[int]]]:
+                Tuple of ``(domains, thresholds, windows)`` sorted in
+                ascending order, or ``(None, None, None)`` when no CSV files
+                exist.
         """
         csv_dir = csv_dir or self.config.resolve_path(self.config.csv_dir)
         csv_files = sorted(Path(csv_dir).glob("*.csv"))
         if not csv_files:
             return None, None, None
 
-        df = pd.read_csv(csv_files[0])
-        domains = sorted(str(x) for x in df["domain"].unique())
-        thresholds = sorted(float(x) for x in df["thresh"].unique())
-        windows = sorted(int(x) for x in df["window"].unique())
+        sample_df = pd.read_csv(csv_files[0])
+        domains = sorted(str(x) for x in sample_df["domain"].unique())
+        thresholds = sorted(float(x) for x in sample_df["thresh"].unique())
+        windows = sorted(int(x) for x in sample_df["window"].unique())
         return domains, thresholds, windows

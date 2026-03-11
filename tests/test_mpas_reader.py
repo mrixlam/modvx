@@ -1,4 +1,16 @@
-"""Tests for modvx.mpas_reader — MPAS mesh loading and input file consistency."""
+#!/usr/bin/env python3
+
+"""
+Tests for modvx.mpas_reader — MPAS mesh loading and input file consistency.
+
+This module contains unit tests for the MPAS reader component of modvx, which is responsible for loading native MPAS diagnostic files and remapping precipitation fields to a regular lat-lon grid. The tests verify that the reader correctly identifies variables to load, handles missing dependencies gracefully, and produces expected outputs for known input files. By isolating the MPAS reading logic, these tests ensure that downstream verification code can rely on consistent and correctly processed input data.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 import types
@@ -24,9 +36,24 @@ _FORECAST_HOURS = 6  # each cycle has 6h of hourly diag files (hours 0-6)
 # Expected mesh size for this grid
 _EXPECTED_NCELLS = 163842
 
-# Skip everything in this module if the test data tree is absent
+def _is_real_netcdf(path: Path) -> bool:
+    """Return True only when *path* is a proper NetCDF file, not a Git-LFS pointer."""
+    if not path.exists() or path.stat().st_size < 512:
+        return False
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(64)
+        # LFS pointer files begin with the ASCII text "version https://git-lfs"
+        return b"version https://git-lfs" not in header
+    except OSError:
+        return False
+
+
+# Skip everything in this module if the test data tree is absent or if the
+# files are Git-LFS pointers (e.g. CI running without LFS budget).
 pytestmark = pytest.mark.skipif(
-    not _GRID_FILE.exists(), reason="test data not present (tests/testdata/)"
+    not _is_real_netcdf(_GRID_FILE),
+    reason="test data not present or is a Git-LFS pointer (tests/testdata/)",
 )
 
 
@@ -391,7 +418,7 @@ class TestEnsureMpasdiagBranches:
             "mpasdiag.processing.utils_geog": None,
         }):
             with pytest.raises(ImportError, match="mpasdiag is required"):
-                mpas_reader._ensure_mpasdiag()
+                mpas_reader._ensure_mpasdiag_available()
         mpas_reader._HAS_MPASDIAG = old_val
 
     def test_ensure_mpasdiag_cached_true(self) -> None:
@@ -408,7 +435,7 @@ class TestEnsureMpasdiagBranches:
 
         old_val = mpas_reader._HAS_MPASDIAG
         mpas_reader._HAS_MPASDIAG = True
-        mpas_reader._ensure_mpasdiag()  # should not raise
+        mpas_reader._ensure_mpasdiag_available()  # should not raise
         mpas_reader._HAS_MPASDIAG = old_val
 
     def test_successful_import(self) -> None:
@@ -427,10 +454,10 @@ class TestEnsureMpasdiagBranches:
         mr._HAS_MPASDIAG = None
 
         fake_remapping = types.ModuleType("mpasdiag.processing.remapping")
-        fake_remapping.remap_mpas_to_latlon_with_masking = MagicMock()
+        setattr(fake_remapping, "remap_mpas_to_latlon_with_masking", MagicMock())
 
         fake_utils = types.ModuleType("mpasdiag.processing.utils_geog")
-        fake_utils.MPASGeographicUtils = MagicMock()
+        setattr(fake_utils, "MPASGeographicUtils", MagicMock())
 
         fake_processing = types.ModuleType("mpasdiag.processing")
         fake_mpasdiag = types.ModuleType("mpasdiag")
@@ -450,11 +477,11 @@ class TestEnsureMpasdiagBranches:
             sys.modules["mpasdiag.processing.remapping"] = fake_remapping
             sys.modules["mpasdiag.processing.utils_geog"] = fake_utils
 
-            mr._ensure_mpasdiag()
+            mr._ensure_mpasdiag_available()
             assert mr._HAS_MPASDIAG is True
 
             # Calling again should be a no-op (early return)
-            mr._ensure_mpasdiag()
+            mr._ensure_mpasdiag_available()
             assert mr._HAS_MPASDIAG is True
         finally:
             for k in keys:
@@ -515,9 +542,9 @@ class TestRemapToLatlonWithGrid:
         mr._HAS_MPASDIAG = True
 
         fake_remapping_mod = types.ModuleType("mpasdiag.processing.remapping")
-        fake_remapping_mod.remap_mpas_to_latlon_with_masking = mock_remap
+        setattr(fake_remapping_mod, "remap_mpas_to_latlon_with_masking", mock_remap)
         fake_utils_mod = types.ModuleType("mpasdiag.processing.utils_geog")
-        fake_utils_mod.MPASGeographicUtils = mock_utils
+        setattr(fake_utils_mod, "MPASGeographicUtils", mock_utils)
 
         saved = {}
         keys = [
@@ -535,7 +562,7 @@ class TestRemapToLatlonWithGrid:
             sys.modules["mpasdiag.processing.utils_geog"] = fake_utils_mod
 
             result = mr.remap_to_latlon(
-                data=np.array([1.0, 2.0, 3.0]),
+                data=xr.DataArray(np.array([1.0, 2.0, 3.0]), dims=["nCells"]),
                 dataset_or_file=str(ds_path),
                 grid_file=str(grid_path),
                 resolution=1.0,

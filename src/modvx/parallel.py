@@ -1,29 +1,23 @@
+#!/usr/bin/env python3
+
 """
 Parallel execution for modvx.
 
-``ParallelProcessor`` supports three execution backends:
+This module defines the ParallelProcessor class, which provides a unified interface for executing verification tasks in parallel using different backends such as multiprocessing or Dask. The ParallelProcessor abstracts away the details of task distribution, worker management, and result collection, allowing the rest of the modvx pipeline to focus on defining the work units and processing logic. By centralizing parallel execution logic, this module enables flexible scaling across different computing environments while maintaining a consistent API for task submission and monitoring. The ParallelProcessor is designed to work seamlessly with the TaskManager, which generates the work units to be processed in parallel.
 
-* **mpi** — distributes work-units across MPI ranks via ``mpi4py``.
-* **multiprocessing** — spawns worker processes using Python's
-  ``multiprocessing.Pool``.  Ideal for single-machine parallelism
-  without requiring an MPI installation.
-* **serial** — sequential execution (default when ``nprocs=1``).
-
-Design goals
-------------
-* **Transparent fallback** — users who do not have ``mpi4py`` installed
-  get serial execution with no code changes when backend is ``"auto"``.
-* **Smart grouping** — work-units that share the same (cycle, region)
-  are ideally assigned to the same worker so that data can be loaded once
-  and reused across threshold/window combinations.
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
 """
 
 from __future__ import annotations
 
-import logging
-import multiprocessing as mp
 import os
 import time
+import logging
+import multiprocessing as mp
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional
 
@@ -38,11 +32,7 @@ MPI = None  # will be set to mpi4py.MPI if available
 
 def _ensure_mpi() -> bool:
     """
-    Lazily attempt to import mpi4py.MPI and cache the result for subsequent calls.
-    The import is performed at most once regardless of how many times this function is called,
-    using a module-level flag to avoid repeated import overhead. On success, the MPI module
-    is stored in the module-level ``MPI`` variable for use by ParallelProcessor. This function
-    does not raise on failure; callers are responsible for checking the return value.
+    Lazily attempt to import mpi4py.MPI and cache the result for subsequent calls. The import is performed at most once regardless of how many times this function is called, using a module-level flag to avoid repeated import overhead. On success, the MPI module is stored in the module-level ``MPI`` variable for use by ParallelProcessor. This function does not raise on failure; callers are responsible for checking the return value.
 
     Returns:
         bool: True if mpi4py.MPI was successfully imported, False otherwise.
@@ -65,13 +55,13 @@ def _ensure_mpi() -> bool:
 _MP_EXECUTE_FN: Optional[Callable[[Dict[str, Any]], None]] = None
 
 
-def _mp_init_worker(execute_fn: Callable[[Dict[str, Any]], None]) -> None:
+def _initialize_multiprocessing_worker(execute_fn: Callable[[Dict[str, Any]], None]) -> None:
     """
     Initialise a multiprocessing worker process by storing the execution function globally.
-    This function is passed as the ``initializer`` argument to multiprocessing.Pool and is
-    called once in each worker process before any work units are dispatched. Storing the
-    function in a module-level variable allows _mp_worker to access it without re-pickling
-    it with every individual task, which reduces inter-process communication overhead.
+    This function is passed as the ``initializer`` argument to ``multiprocessing.Pool`` and
+    is called once in each worker process before any work units are dispatched. Storing
+    the function in the module-level ``_MP_EXECUTE_FN`` variable allows worker processes to
+    call it for each assigned unit without re-pickling the function for every task.
 
     Parameters:
         execute_fn (Callable[[Dict[str, Any]], None]): The work-unit execution function
@@ -84,14 +74,14 @@ def _mp_init_worker(execute_fn: Callable[[Dict[str, Any]], None]) -> None:
     _MP_EXECUTE_FN = execute_fn
 
 
-def _mp_worker(units: List[Dict[str, Any]]) -> int:
+def _multiprocessing_worker_execute_units(units: List[Dict[str, Any]]) -> int:
     """
-    Execute a list of work-units sequentially within a single multiprocessing worker process.
-    The execution function must have been stored in the module-level ``_MP_EXECUTE_FN``
-    variable by a prior call to _mp_init_worker; an assertion error is raised if this
-    precondition is not met. Grouping multiple units into a single worker call allows the
-    FileManager's in-memory cache to be shared across units within the same (cycle, region)
-    group, reducing redundant I/O.
+    Execute a list of work-units sequentially within a single multiprocessing worker
+    process. The execution function must have been stored in the module-level
+    ``_MP_EXECUTE_FN`` variable by a prior call to the pool initializer; an assertion
+    error is raised if this precondition is not met. Grouping multiple units into a
+    single worker call allows the FileManager's in-memory cache to be reused across
+    units in the same (cycle, region) group, reducing redundant I/O.
 
     Parameters:
         units (list of dict): Ordered list of work-unit dictionaries to execute sequentially.
@@ -107,12 +97,7 @@ def _mp_worker(units: List[Dict[str, Any]]) -> int:
 
 class ParallelProcessor:
     """
-    Distribute and execute modvx work-units across multiple processes or MPI ranks.
-    Three backends are supported: ``"mpi"`` for multi-node HPC environments via mpi4py,
-    ``"multiprocessing"`` for single-machine parallelism via Python's multiprocessing pool,
-    and ``"serial"`` for sequential debugging. Backend selection defaults to ``"auto"``,
-    which inspects environment variables to detect MPI launch conditions and falls back
-    to serial when no parallelism is detectable.
+    Distribute and execute modvx work-units across multiple processes or MPI ranks. Three backends are supported: ``"mpi"`` for multi-node HPC environments via mpi4py, ``"multiprocessing"`` for single-machine parallelism via Python's multiprocessing pool, and ``"serial"`` for sequential debugging. Backend selection defaults to ``"auto"``, which inspects environment variables to detect MPI launch conditions and falls back to serial when no parallelism is detectable.
 
     Parameters:
         execute_fn (callable): Function accepting a single work-unit dict, typically
@@ -152,12 +137,7 @@ class ParallelProcessor:
     @staticmethod
     def _resolve_backend(requested: str) -> str:
         """
-        Resolve the ``"auto"`` backend selection to a concrete named backend.
-        The selection logic checks well-known MPI launcher environment variables (for Open MPI,
-        MPICH, Intel MPI, and PMIx) to determine whether the process was started under mpirun,
-        avoiding an unconditional mpi4py import that would slow down non-MPI runs. If a
-        multi-rank MPI context is detected, ``"mpi"`` is returned; otherwise ``"serial"`` is
-        the default. Explicit backend names are returned unchanged.
+        Resolve the ``"auto"`` backend selection to a concrete named backend. The selection logic checks well-known MPI launcher environment variables (for Open MPI, MPICH, Intel MPI, and PMIx) to determine whether the process was started under mpirun, avoiding an unconditional mpi4py import that would slow down non-MPI runs. If a multi-rank MPI context is detected, ``"mpi"`` is returned; otherwise ``"serial"`` is the default. Explicit backend names are returned unchanged.
 
         Parameters:
             requested (str): Backend name as requested by the user; ``"auto"`` triggers
@@ -191,55 +171,45 @@ class ParallelProcessor:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _group_key(unit: Dict[str, Any]) -> str:
+    def _unit_cycle_key(unit: Dict[str, Any]) -> str:
         """
-        Generate a string key that identifies work-units sharing the same forecast and observation data.
-        Units with the same cycle start time and region name access identical files and can reuse
-        cached data without re-reading them, making it beneficial to assign them to the same worker.
-        The key is formed by combining the formatted cycle start string and region name separated
-        by an underscore.
+        Generate a string key that identifies work-units sharing the same forecast cycle.
+        Units with the same cycle start time access identical forecast files and can reuse
+        cached data, so grouping by the cycle enables assigning them to the same worker.
 
         Parameters:
-            unit (dict): Work-unit dictionary containing at least ``cycle_start`` and
-                ``region_name`` keys.
+            unit (dict): Work-unit dictionary containing at least ``cycle_start``.
 
         Returns:
-            str: Group key string in the format ``"<YYYYmmddHH>_<region_name>"``.
+            str: Cycle key string in the format ``"<YYYYmmddHH>"``.
         """
-        cs = unit["cycle_start"].strftime("%Y%m%d%H")
-        return f"{cs}_{unit['region_name']}"
+        return unit["cycle_start"].strftime("%Y%m%d%H")
 
     @staticmethod
-    def _build_groups(units: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    def _group_units_by_cycle(units: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Organise a flat list of work-units into groups by their shared (cycle, region) data key.
-        Work-units within the same group access identical forecast and observation files, so
-        assigning them to the same worker allows the FileManager's in-memory cache to be reused.
-        The grouping is performed using the cycle start and region name as a compound key.
+        Organise a flat list of work-units into groups keyed by forecast cycle. Grouping
+        units by cycle enables each worker to reuse cached forecast data across regions
+        within the same cycle, reducing redundant I/O.
 
         Parameters:
             units (list of dict): Flat list of all work-unit dictionaries.
 
         Returns:
-            Dict[str, list of dict]: Dictionary mapping group keys to lists of work-units
+            Dict[str, list of dict]: Dictionary mapping cycle keys to lists of work-units
                 in that group.
         """
         groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        for u in units:
-            cs = u["cycle_start"].strftime("%Y%m%d%H")
-            key = f"{cs}_{u['region_name']}"
-            groups[key].append(u)
+        for unit in units:
+            key = unit["cycle_start"].strftime("%Y%m%d%H")
+            groups[key].append(unit)
         return groups
 
-    def _assign_groups_round_robin(
+    def _assign_groups_to_workers_round_robin(
         self, units: List[Dict[str, Any]], num_workers: int,
     ) -> Dict[int, List[Dict[str, Any]]]:
         """
-        Assign work-unit groups to workers using a round-robin scheduling strategy.
-        Groups are sorted by key before assignment, ensuring deterministic distribution
-        across runs. All units within the same (cycle, region) group are assigned to the
-        same worker index, preserving the data-locality property that enables the
-        FileManager's in-memory cache to be reused across threshold/window combinations.
+        Assign work-unit groups to workers using a round-robin scheduling strategy. Groups are sorted by key before assignment, ensuring deterministic distribution across runs. All units within the same (cycle, region) group are assigned to the same worker index, preserving the data-locality property that enables the FileManager's in-memory cache to be reused across threshold/window combinations.
 
         Parameters:
             units (list of dict): Complete list of work-unit dictionaries to distribute.
@@ -249,10 +219,10 @@ class ParallelProcessor:
             Dict[int, list of dict]: Mapping from zero-based worker index to assigned
                 work-unit list.
         """
-        groups = self._build_groups(units)
+        groups = self._group_units_by_cycle(units)
         assignment: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-        for idx, (_, group_units) in enumerate(sorted(groups.items())):
-            worker = idx % num_workers
+        for group_index, (_, group_units) in enumerate(sorted(groups.items())):
+            worker = group_index % num_workers
             assignment[worker].extend(group_units)
         return assignment
 
@@ -262,12 +232,7 @@ class ParallelProcessor:
 
     def run(self, units: List[Dict[str, Any]]) -> None:
         """
-        Execute all work-units using the configured parallel backend.
-        The appropriate backend runner (_run_serial, _run_mpi, or _run_multiprocessing) is
-        selected based on the resolved backend name and dispatched with the full unit list.
-        Total wall-clock time is measured and logged at INFO level on the root process after
-        all units have completed. This is the primary public method called by the CLI run
-        command after TaskManager.build_work_units returns the full task list.
+        Execute all work-units using the configured parallel backend. The appropriate backend runner (_run_serial, _run_mpi, or _run_multiprocessing) is selected based on the resolved backend name and dispatched with the full unit list. Total wall-clock time is measured and logged at INFO level on the root process after all units have completed. This is the primary public method called by the CLI run command after TaskManager.build_work_units returns the full task list.
 
         Parameters:
             units (list of dict): Complete list of work-unit dictionaries to execute.
@@ -278,11 +243,11 @@ class ParallelProcessor:
         t0 = time.time()
 
         if self._backend == "mpi":
-            self._run_mpi(units)
+            self._execute_mpi(units)
         elif self._backend == "multiprocessing":
-            self._run_multiprocessing(units)
+            self._execute_multiprocessing(units)
         else:
-            self._run_serial(units)
+            self._execute_serial(units)
 
         elapsed = time.time() - t0
         if self.is_root:
@@ -295,13 +260,9 @@ class ParallelProcessor:
     # Serial backend
     # ------------------------------------------------------------------
 
-    def _run_serial(self, units: List[Dict[str, Any]]) -> None:
+    def _execute_serial(self, units: List[Dict[str, Any]]) -> None:
         """
-        Execute all work-units sequentially in the current process.
-        This is the simplest backend and requires no inter-process communication or
-        synchronisation. It is used when no parallelism is available or desired, and
-        is the safe fallback when neither MPI nor multiprocessing can be initialised.
-        Useful for debugging because all execution occurs in a single Python scope.
+        Execute all work-units sequentially in the current process. This is the simplest backend and requires no inter-process communication or synchronisation. It is used when no parallelism is available or desired, and is the safe fallback when neither MPI nor multiprocessing can be initialised. Useful for debugging because all execution occurs in a single Python scope.
 
         Parameters:
             units (list of dict): Complete list of work-unit dictionaries to execute in order.
@@ -317,13 +278,9 @@ class ParallelProcessor:
     # MPI backend
     # ------------------------------------------------------------------
 
-    def _run_mpi(self, units: List[Dict[str, Any]]) -> None:
+    def _execute_mpi(self, units: List[Dict[str, Any]]) -> None:
         """
-        Distribute and execute work-units across MPI ranks using round-robin group assignment.
-        Each rank receives a disjoint subset of work-unit groups, with all units in the same
-        (cycle, region) group guaranteed to land on the same rank to maximise cache reuse.
-        A collective barrier at the end ensures all ranks have completed before the root
-        process logs the completion message and control returns to the caller.
+        Distribute and execute work-units across MPI ranks using round-robin group assignment. Each rank receives a disjoint subset of work-unit groups, with all units in the same (cycle, region) group guaranteed to land on the same rank to maximise cache reuse. A collective barrier at the end ensures all ranks have completed before the root process logs the completion message and control returns to the caller.
 
         Parameters:
             units (list of dict): Complete list of work-unit dictionaries; each rank will
@@ -332,7 +289,7 @@ class ParallelProcessor:
         Returns:
             None
         """
-        assignment = self._assign_groups_round_robin(units, self.size)
+        assignment = self._assign_groups_to_workers_round_robin(units, self.size)
         my_units = assignment.get(self.rank, [])
 
         logger.info(
@@ -352,17 +309,14 @@ class ParallelProcessor:
         if self.rank == 0:
             logger.info("All %d MPI ranks completed.", self.size)
 
+
     # ------------------------------------------------------------------
     # Multiprocessing backend
     # ------------------------------------------------------------------
 
-    def _run_multiprocessing(self, units: List[Dict[str, Any]]) -> None:
+    def _execute_multiprocessing(self, units: List[Dict[str, Any]]) -> None:
         """
-        Distribute and execute work-units across a pool of worker processes.
-        Work-units are grouped by (cycle, region) and assigned round-robin to workers so
-        that each worker's in-memory FileManager cache remains effective within its group.
-        The pool is initialised with _mp_init_worker to install the execution function
-        without repeated pickling, and pool.map blocks until all workers finish.
+        Distribute and execute work-units across a pool of worker processes. Work-units are grouped by (cycle, region) and assigned round-robin to workers so that each worker's in-memory FileManager cache remains effective within its group. The pool is initialised with _mp_init_worker to install the execution function without repeated pickling, and pool.map blocks until all workers finish.
 
         Parameters:
             units (list of dict): Complete list of work-unit dictionaries to distribute
@@ -372,14 +326,13 @@ class ParallelProcessor:
             None
         """
         nprocs = min(self._nprocs, len(units))
-        assignment = self._assign_groups_round_robin(units, nprocs)
+        assignment = self._assign_groups_to_workers_round_robin(units, nprocs)
 
         logger.info(
-            "Running %d work-units across %d worker processes "
-            "(%d groups).",
+            "Running %d work-units across %d worker processes (%d groups).",
             len(units),
             nprocs,
-            len(self._build_groups(units)),
+            len(self._group_units_by_cycle(units)),
         )
 
         # Build a list of per-worker unit-lists
@@ -387,10 +340,10 @@ class ParallelProcessor:
 
         with mp.Pool(
             processes=nprocs,
-            initializer=_mp_init_worker,
+            initializer=_initialize_multiprocessing_worker,
             initargs=(self.execute_fn,),
         ) as pool:
-            counts = pool.map(_mp_worker, work_packets)
+            counts = pool.map(_multiprocessing_worker_execute_units, work_packets)
 
         logger.info(
             "Multiprocessing complete — %d work-units finished by %d workers.",
@@ -398,14 +351,12 @@ class ParallelProcessor:
             nprocs,
         )
 
+    # Note: legacy short-name aliases removed; use descriptive method names.
+
     @property
     def is_root(self) -> bool:
         """
-        Indicate whether the current process is the root (rank 0) process.
-        In MPI mode, only rank 0 returns True, which is used to gate log messages and
-        post-processing steps that should execute only once across the communicator.
-        In serial and multiprocessing modes, this property always returns True since
-        there is only one controlling process.
+        Indicate whether the current process is the root (rank 0) process. In MPI mode, only rank 0 returns True, which is used to gate log messages and post-processing steps that should execute only once across the communicator. In serial and multiprocessing modes, this property always returns True since there is only one controlling process.
 
         Returns:
             bool: True if this process is MPI rank 0 or running in a non-MPI mode.

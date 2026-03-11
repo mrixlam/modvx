@@ -1,4 +1,16 @@
-"""Tests for modvx.file_manager — mask loading, intermediate saves, FSS save, and CSV extraction."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for additional MODvx file management utilities.
+
+This module contains tests for extended FileManager methods that were added after the initial test_file_manager.py suite. These tests cover path construction for MPAS diagnostic files based on valid-time and cycle arguments, ensuring the correct filename format is produced for both typical and edge-case times (e.g., midnight). By isolating these path-building tests, we can confirm that the FileManager correctly translates temporal metadata into filesystem paths that align with the expected directory structure and naming conventions used in the MODvx pipeline.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 import os
@@ -154,7 +166,7 @@ class TestObsCacheKey:
             None
         """
         vt = datetime.datetime(2024, 9, 17, 6, 0)
-        key = fm._obs_cache_key(vt)
+        key = fm._observation_cache_key(vt)
         assert key == "obs_accum_2024091706_1h"
 
 
@@ -379,7 +391,7 @@ class TestObservationCaching:
             None
         """
         vt = datetime.datetime(2024, 9, 17, 6, 0)
-        key = fm._obs_cache_key(vt)
+        key = fm._observation_cache_key(vt)
         cached = xr.DataArray(np.ones(5))
         fm._obs_mem_cache[key] = cached
 
@@ -394,7 +406,7 @@ class TestObservationCaching:
             None
         """
         vt = datetime.datetime(2024, 9, 17, 6, 0)
-        key = fm._obs_cache_key(vt)
+        key = fm._observation_cache_key(vt)
 
         # Write a disk cache entry
         cache_dir = Path(tmp_cfg.base_dir) / ".obs_cache"
@@ -510,15 +522,15 @@ class TestObsDiskCacheWrite:
         fake_da = xr.DataArray(np.ones((3, 3)), dims=["lat", "lon"])
         vt = datetime.datetime(2024, 9, 17, 0)
 
-        with patch.object(fm, "_accumulate_observations_raw", return_value=fake_da):
+        with patch.object(fm, "_compute_observation_accumulation_raw", return_value=fake_da):
             fm.accumulate_observations(vt)
 
-        key = fm._obs_cache_key(vt)
+        key = fm._observation_cache_key(vt)
         disk_path = os.path.join(cache_dir, f"{key}.nc")
         assert os.path.exists(disk_path)
 
         # Second call hits the memory cache
-        with patch.object(fm, "_accumulate_observations_raw") as mock_raw:
+        with patch.object(fm, "_compute_observation_accumulation_raw") as mock_raw:
             fm.accumulate_observations(vt)
             mock_raw.assert_not_called()
 
@@ -529,7 +541,7 @@ class TestObsDiskCacheWrite:
 
 
 class TestAccumulateObservationsRaw:
-    """Cover FileManager._accumulate_observations_raw."""
+    """Cover FileManager._compute_observation_accumulation_raw."""
 
     def test_raw_accumulation(self, tmp_path: Path) -> None:
         """
@@ -557,7 +569,7 @@ class TestAccumulateObservationsRaw:
         with patch.object(fm, "get_observation_filepath") as mock_path:
             mock_path.return_value = str(tmp_path / "fake_obs.nc")
             ds.to_netcdf(str(tmp_path / "fake_obs.nc"))
-            result = fm._accumulate_observations_raw(vt)
+            result = fm._compute_observation_accumulation_raw(vt)
 
         assert result is not None
         assert result.shape == (5, 5)
@@ -722,7 +734,7 @@ class TestExtractFssToCsvSkipPaths:
             "experiment/ExtendedFC/2024091700/pp12h/fss_GLOBAL_pp90_w3.nc",
             ds,
         )
-        with patch("modvx.utils.extract_lead_time_hours", return_value=None):
+        with patch("modvx.utils.extract_lead_time_hours_from_path", return_value=None):
             csv_dir = tmp_path / "csv"
             fm.extract_fss_to_csv(
                 output_dir=str(tmp_path / "output"),
@@ -749,8 +761,13 @@ class TestExtractFssToCsvSkipPaths:
             "experiment/ExtendedFC/2024091700/pp12h/fss_GLOBAL_pp90_w3.nc",
             ds,
         )
-        with patch("modvx.utils.extract_lead_time_hours", return_value=6), \
-             patch("modvx.utils.parse_filename_metadata", return_value=None):
+        with patch(
+            "modvx.utils.extract_lead_time_hours_from_path",
+            return_value=6,
+        ), patch(
+            "modvx.utils.parse_fss_filename_metadata",
+            return_value=None,
+        ):
             csv_dir = tmp_path / "csv"
             fm.extract_fss_to_csv(
                 output_dir=str(tmp_path / "output"),

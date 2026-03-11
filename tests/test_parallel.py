@@ -1,4 +1,16 @@
-"""Tests for modvx.parallel — backend selection, grouping, and execution."""
+#!/usr/bin/env python3
+
+"""
+Tests for modvx.parallel — backend selection, grouping, and execution.
+
+This module contains unit and integration tests for the ParallelProcessor class and its associated logic. Tests cover backend selection based on configuration, correct grouping of work-units by cycle and region, and successful execution of parallel tasks with mock processing functions. The goal is to ensure that the parallel processing framework correctly orchestrates the distribution of work across available resources while adhering to the smart grouping strategy that minimizes redundant data loading.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 from __future__ import annotations
 
@@ -9,8 +21,8 @@ from unittest.mock import MagicMock, patch
 
 from modvx.parallel import (
     ParallelProcessor,
-    _mp_init_worker,
-    _mp_worker,
+    _initialize_multiprocessing_worker,
+    _multiprocessing_worker_execute_units,
 )
 
 
@@ -90,31 +102,33 @@ class TestGrouping:
 
     def test_group_key(self) -> None:
         """
-        Verify that _group_key returns a string combining cycle start and region name separated by underscore. The group key is used to co-locate work units that share the same forecast cycle and region so they are processed by the same parallel worker. Consistent key formatting is required for round-robin assignment to correctly bucket related units.
+        Verify that _group_key returns the cycle start string, used to co-locate
+        work units that share the same forecast cycle on the same parallel worker.
 
         Returns:
             None
         """
         unit = _make_unit("2024091700", "GLOBAL")
-        key = ParallelProcessor._group_key(unit)
-        assert key == "2024091700_GLOBAL"
+        key = ParallelProcessor._unit_cycle_key(unit)
+        assert key == "2024091700"
 
     def test_build_groups(self) -> None:
         """
-        Verify that _build_groups correctly buckets work units by their group key into a dictionary. This test supplies three units — two sharing the same cycle and region and one with a different combination — and asserts the resulting groups dictionary has two entries with the correct per-group counts. Correct grouping is the prerequisite for round-robin assignment.
+        Verify that _build_groups groups work units by cycle, so all regions for the
+        same cycle are in one group.  This maximises forecast data reuse in the cache.
 
         Returns:
             None
         """
         units = [
             _make_unit("2024091700", "GLOBAL"),
-            _make_unit("2024091700", "GLOBAL"),
+            _make_unit("2024091700", "TROPICS"),
             _make_unit("2024091800", "TROPICS"),
         ]
-        groups = ParallelProcessor._build_groups(units)
+        groups = ParallelProcessor._group_units_by_cycle(units)
         assert len(groups) == 2
-        assert len(groups["2024091700_GLOBAL"]) == 2
-        assert len(groups["2024091800_TROPICS"]) == 1
+        assert len(groups["2024091700"]) == 2
+        assert len(groups["2024091800"]) == 1
 
     def test_round_robin_assignment(self) -> None:
         """
@@ -130,33 +144,33 @@ class TestGrouping:
         ]
         fn = MagicMock()
         pp = ParallelProcessor(fn, backend="serial")
-        assignment = pp._assign_groups_round_robin(units, 2)
+        assignment = pp._assign_groups_to_workers_round_robin(units, 2)
         # 3 groups → worker 0 gets 2, worker 1 gets 1 (round robin)
         total = sum(len(v) for v in assignment.values())
         assert total == 3
 
     def test_same_group_same_worker(self) -> None:
         """
-        Verify that work units sharing the same cycle and region are assigned to the same worker. Grouping related units on a single worker prevents redundant observation accumulation when multiple thresholds or windows are computed for the same cycle-region pair. This test constructs two GLOBAL units for the same cycle and asserts they land in the same worker bucket.
+        Verify that work units sharing the same cycle are assigned to the same worker,
+        so the in-memory forecast cache is reused across regions.
 
         Returns:
             None
         """
         units = [
             _make_unit("2024091700", "GLOBAL"),
-            _make_unit("2024091700", "GLOBAL"),
-            _make_unit("2024091800", "TROPICS"),
+            _make_unit("2024091700", "TROPICS"),
+            _make_unit("2024091800", "NAMERICA"),
         ]
         fn = MagicMock()
         pp = ParallelProcessor(fn, backend="serial")
-        assignment = pp._assign_groups_round_robin(units, 2)
-        # Both GLOBAL units should be in the same worker
+        assignment = pp._assign_groups_to_workers_round_robin(units, 2)
+        # Both cycle-1700 units (GLOBAL + TROPICS) should be in the same worker
         for worker_units in assignment.values():
-            regions = [u["region_name"] for u in worker_units]
-            cycles = [u["cycle_start"] for u in worker_units]
-            # All units in a worker's list should share group key
-            if len(worker_units) > 1:
-                assert len(set(f"{c}_{r}" for c, r in zip(cycles, regions))) == 1
+            cycles = {u["cycle_start"].strftime("%Y%m%d%H") for u in worker_units}
+            assert len(cycles) == 1, (
+                "Units from different cycles should not share a worker bucket"
+            )
 
 
 # -----------------------------------------------------------------------
@@ -218,7 +232,7 @@ class TestMpWorkerFunctions:
         """
         import modvx.parallel as par
         fn = MagicMock()
-        _mp_init_worker(fn)
+        _initialize_multiprocessing_worker(fn)
         assert par._MP_EXECUTE_FN is fn
 
     def test_mp_worker_executes(self) -> None:
@@ -229,9 +243,9 @@ class TestMpWorkerFunctions:
             None
         """
         fn = MagicMock()
-        _mp_init_worker(fn)
+        _initialize_multiprocessing_worker(fn)
         units = [_make_unit("2024091700", "GLOBAL")]
-        count = _mp_worker(units)
+        count = _multiprocessing_worker_execute_units(units)
         assert count == 1
         fn.assert_called_once()
 
@@ -356,12 +370,12 @@ class TestEnsureMpiBranches:
         par._HAS_MPI = None
 
         fake_mpi_mod = types.ModuleType("mpi4py.MPI")
-        fake_mpi_mod.COMM_WORLD = MagicMock()
-        fake_mpi_mod.COMM_WORLD.Get_size.return_value = 4
-        fake_mpi_mod.COMM_WORLD.Get_rank.return_value = 0
+        setattr(fake_mpi_mod, "COMM_WORLD", MagicMock())
+        fake_mpi_mod.COMM_WORLD.Get_size.return_value = 4 
+        fake_mpi_mod.COMM_WORLD.Get_rank.return_value = 0 
 
         fake_mpi4py = types.ModuleType("mpi4py")
-        fake_mpi4py.MPI = fake_mpi_mod
+        setattr(fake_mpi4py, "MPI", fake_mpi_mod)
 
         with patch.dict("sys.modules", {
             "mpi4py": fake_mpi4py,
@@ -476,7 +490,7 @@ class TestMpiBackend:
             {"cycle_start": datetime.datetime(2024, 9, 17), "region_name": "GLOBAL"},
             {"cycle_start": datetime.datetime(2024, 9, 18), "region_name": "GLOBAL"},
         ]
-        pp._run_mpi(units)
+        pp._execute_mpi(units)
         assert fn.call_count >= 1
         pp.comm.Barrier.assert_called_once()
 
@@ -506,5 +520,5 @@ class TestMpiBackend:
             {"cycle_start": datetime.datetime(2024, 9, 17), "region_name": "GLOBAL"},
             {"cycle_start": datetime.datetime(2024, 9, 18), "region_name": "GLOBAL"},
         ]
-        pp._run_mpi(units)
+        pp._execute_mpi(units)
         pp.comm.Barrier.assert_called_once()

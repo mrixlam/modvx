@@ -1,4 +1,16 @@
-"""Tests for modvx.task_manager — work-unit building and execution."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx task manager.
+
+This module contains unit tests for the `TaskManager` class, validating work-unit generation, logging setup, and the execution pipeline with mocked I/O. Tests exercise `build_work_units`, logging/file-handler creation, and `execute_work_unit` behaviour across multiple cycles and domains. Fixtures create minimal `ModvxConfig` instances rooted in temporary directories so the suite runs in isolation without external dependencies.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 from __future__ import annotations
 

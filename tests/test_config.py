@@ -1,11 +1,28 @@
-"""Tests for modvx.config."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx configuration management.
+
+This module contains tests for the ModvxConfig class and its associated YAML loading function. The tests verify that configuration parameters are correctly parsed, default values are applied, and error handling works as expected for invalid inputs. By ensuring the integrity of the configuration system, these tests help maintain the robustness and reliability of the overall verification workflow.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 from pathlib import Path
 
 import pytest
 
-from modvx.config import ModvxConfig, _parse_datetime_str, load_config, merge_cli_overrides
+from modvx.config import (
+    ModvxConfig,
+    _parse_datetime_string,
+    load_config_from_yaml,
+    apply_cli_overrides,
+)
 
 
 class TestModvxConfig:
@@ -77,7 +94,7 @@ final_cycle_start: "20240110T00"
 """
         f = tmp_path / "test.yaml"
         f.write_text(yaml_text)
-        cfg = load_config(f)
+        cfg = load_config_from_yaml(f)
 
         assert cfg.experiment_name == "test_exp"
         assert cfg.forecast_step_hours == 6
@@ -93,7 +110,7 @@ final_cycle_start: "20240110T00"
             None
         """
         with pytest.raises(FileNotFoundError):
-            load_config("/nonexistent/path.yaml")
+            load_config_from_yaml("/nonexistent/path.yaml")
 
 
 class TestMergeCLI:
@@ -107,7 +124,7 @@ class TestMergeCLI:
             None
         """
         base = ModvxConfig(experiment_name="old")
-        merged = merge_cli_overrides(base, {"experiment_name": "new"})
+        merged = apply_cli_overrides(base, {"experiment_name": "new"})
         assert merged.experiment_name == "new"
         # Original unchanged
         assert base.experiment_name == "old"
@@ -120,7 +137,7 @@ class TestMergeCLI:
             None
         """
         base = ModvxConfig(experiment_name="keep_me")
-        merged = merge_cli_overrides(base, {"experiment_name": None, "verbose": True})
+        merged = apply_cli_overrides(base, {"experiment_name": None, "verbose": True})
         assert merged.experiment_name == "keep_me"
         assert merged.verbose is True
 
@@ -132,7 +149,7 @@ class TestMergeCLI:
             None
         """
         base = ModvxConfig()
-        merged = merge_cli_overrides(base, {"no_such_field": 42})
+        merged = apply_cli_overrides(base, {"no_such_field": 42})
         assert merged.experiment_name == base.experiment_name
 
 
@@ -171,7 +188,7 @@ class TestConfigProperties:
         Returns:
             None
         """
-        result = _parse_datetime_str("2024-09-17T00:00:00")
+        result = _parse_datetime_string("2024-09-17T00:00:00")
         assert result == datetime.datetime(2024, 9, 17, 0, 0, 0)
 
     def test_parse_datetime_space_format(self) -> None:
@@ -181,7 +198,7 @@ class TestConfigProperties:
         Returns:
             None
         """
-        result = _parse_datetime_str("2024-09-17 12:30:00")
+        result = _parse_datetime_string("2024-09-17 12:30:00")
         assert result == datetime.datetime(2024, 9, 17, 12, 30, 0)
 
     def test_parse_datetime_bad_raises(self) -> None:
@@ -192,4 +209,4 @@ class TestConfigProperties:
             None
         """
         with pytest.raises(ValueError, match="Cannot parse datetime"):
-            _parse_datetime_str("not-a-date")
+            _parse_datetime_string("not-a-date")

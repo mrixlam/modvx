@@ -1,4 +1,16 @@
-"""Tests for modvx.file_manager — path construction and FIMERG helpers."""
+#!/usr/bin/env python3
+
+"""
+Unit tests for MODvx file management utilities.
+
+This module contains tests for the FileManager class and its associated helper functions, verifying correct file discovery, loading, caching, and saving behavior. The tests cover scenarios such as locating forecast and observation files based on configuration patterns, handling missing or malformed files gracefully, ensuring data is loaded into the expected xarray structures, and confirming that intermediate results are saved with the correct metadata and format. By isolating file management logic in these tests, we can ensure robust I/O operations that underpin the entire verification workflow.
+
+Author: Rubaiat Islam
+Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
+Email: mrislam@ucar.edu
+Date: February 2026
+Version: 1.0.0
+"""
 
 import datetime
 
@@ -118,3 +130,30 @@ class TestGroupObsTimes:
         assert "20250615" in groups
         assert len(groups["20250614"]) == 2  # 23:00 and midnight
         assert len(groups["20250615"]) == 1  # 01:00
+
+
+class TestFcstCacheKey:
+    """Tests for _fcst_cache_key deterministic key generation."""
+
+    def test_key_format(self, fm: FileManager) -> None:
+        vt = datetime.datetime(2024, 9, 17, 6, 0, 0)
+        key = fm._forecast_cache_key("2024091700", vt)
+        assert key == "fcst_accum_2024091700_2024091706_12h"
+
+    def test_different_valid_times_yield_different_keys(self, fm: FileManager) -> None:
+        vt1 = datetime.datetime(2024, 9, 17, 6)
+        vt2 = datetime.datetime(2024, 9, 17, 7)
+        assert fm._forecast_cache_key("2024091700", vt1) != fm._forecast_cache_key("2024091700", vt2)
+
+    def test_different_init_times_yield_different_keys(self, fm: FileManager) -> None:
+        vt = datetime.datetime(2024, 9, 17, 6)
+        assert fm._forecast_cache_key("2024091700", vt) != fm._forecast_cache_key("2024091800", vt)
+
+
+class TestFcstMemCache:
+    """Tests for the in-memory forecast cache dict."""
+
+    def test_cache_dict_exists(self, fm: FileManager) -> None:
+        assert hasattr(fm, "_fcst_mem_cache")
+        assert isinstance(fm._fcst_mem_cache, dict)
+        assert len(fm._fcst_mem_cache) == 0
