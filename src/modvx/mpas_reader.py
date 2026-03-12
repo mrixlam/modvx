@@ -66,8 +66,9 @@ def _ensure_mpasdiag_available() -> None:
     
     # If the availability has already been determined to be False, raise the same ImportError again
     try:
-        from mpasdiag.processing.remapping import remap_mpas_to_latlon_with_masking  # type: ignore[import-untyped]  
-        from mpasdiag.processing.utils_geog import MPASGeographicUtils  # type: ignore[import-untyped] 
+        # Import modules to verify availability; the imports themselves are used for checking availability
+        import mpasdiag.processing.remapping   # type: ignore[import-untyped]  # noqa: F401
+        import mpasdiag.processing.utils_geog  # type: ignore[import-untyped]  # noqa: F401
         _HAS_MPASDIAG = True
     except ImportError as exc:
         _HAS_MPASDIAG = False
