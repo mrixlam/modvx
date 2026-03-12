@@ -133,12 +133,14 @@ class TestGroupObsTimes:
 
 
 class TestFcstCacheKey:
-    """Tests for _fcst_cache_key deterministic key generation."""
+    """Tests for _forecast_cache_key deterministic key generation."""
 
     def test_key_format(self, fm: FileManager) -> None:
+        """Key must encode experiment name, init string, valid time, and step."""
         vt = datetime.datetime(2024, 9, 17, 6, 0, 0)
         key = fm._forecast_cache_key("2024091700", vt)
-        assert key == "fcst_accum_2024091700_2024091706_12h"
+        exp = fm.config.experiment_name
+        assert key == f"fcst_accum_{exp}_2024091700_2024091706_12h"
 
     def test_different_valid_times_yield_different_keys(self, fm: FileManager) -> None:
         vt1 = datetime.datetime(2024, 9, 17, 6)
@@ -148,6 +150,14 @@ class TestFcstCacheKey:
     def test_different_init_times_yield_different_keys(self, fm: FileManager) -> None:
         vt = datetime.datetime(2024, 9, 17, 6)
         assert fm._forecast_cache_key("2024091700", vt) != fm._forecast_cache_key("2024091800", vt)
+
+    def test_different_experiments_yield_different_keys(self) -> None:
+        """Two FileManagers for different experiments must produce distinct cache keys
+        for the same (init_string, valid_time) so they never share a cache entry."""
+        fm_a = FileManager(ModvxConfig(base_dir="/work", mpas_grid_file="grid/x1.grid.nc", experiment_name="exp_a"))
+        fm_b = FileManager(ModvxConfig(base_dir="/work", mpas_grid_file="grid/x1.grid.nc", experiment_name="exp_b"))
+        vt = datetime.datetime(2024, 9, 17, 6, 0, 0)
+        assert fm_a._forecast_cache_key("2024091700", vt) != fm_b._forecast_cache_key("2024091700", vt)
 
 
 class TestFcstMemCache:

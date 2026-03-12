@@ -41,15 +41,15 @@ class TestModvxConfig:
         assert cfg.window_sizes == [1, 3, 5, 7, 9, 11, 13, 15]
         assert cfg.forecast_step == datetime.timedelta(hours=12)
 
-    def test_resolve_path(self) -> None:
+    def test_resolve_relative_path(self) -> None:
         """
-        Confirm that resolve_path correctly joins the base directory with a relative subpath. This test instantiates ModvxConfig with a known base_dir value and asserts that the resolved path matches the expected absolute string. It serves as a minimal contract check for the path construction logic used throughout the pipeline when building forecast and output directories.
+        Confirm that resolve_relative_path correctly joins the base directory with a relative subpath. This test instantiates ModvxConfig with a known base_dir value and asserts that the resolved path matches the expected absolute string. It serves as a minimal contract check for the path construction logic used throughout the pipeline when building forecast and output directories.
 
         Returns:
             None
         """
         cfg = ModvxConfig(base_dir="/data")
-        assert cfg.resolve_path("output") == "/data/output"
+        assert cfg.resolve_relative_path("output") == "/data/output"
 
     def test_timedelta_properties(self) -> None:
         """

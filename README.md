@@ -68,6 +68,7 @@ MODvx uses flat YAML configuration files to specify all aspects of the verificat
 # configs/default.yaml  —  annotated reference configuration
 
 # ---- experiment / time range -------------------------------------------
+
 experiment_name: "liuz_coldstart_15km2025"  # used in output filenames and plot titles
 initial_cycle_start: "20250613T00"           # first cycle (yyyymmddThh)
 final_cycle_start:   "20250709T00"           # last cycle  (yyyymmddThh)
@@ -77,16 +78,19 @@ cycle_interval_hours: 24       # interval between initialisation cycles (hours)
 forecast_length_hours: 48      # total lead time to verify (hours)
 
 # ---- MPAS mesh settings (leave mpas_grid_file empty for regular-grid input) ----
+
 mpas_grid_file: ""      # path to MPAS static grid file; empty = not an MPAS run
 mpas_remap_resolution: 0.1  # target lat-lon resolution after MPAS remapping (degrees)
 
 # ---- grid / resolution --------------------------------------------------
+
 # "obs"  = regrid forecast to the observation grid (default)
 # "fcst" = regrid observation to the forecast grid
 # 0.25   = regrid both to a fixed resolution in degrees
 target_resolution: "obs"
 
 # ---- verification domains -----------------------------------------------
+
 vxdomain:              # domains to verify (subset of keys defined in 'regions')
   - "GLOBAL"
 
@@ -103,6 +107,7 @@ regions:               # map of domain name → mask NetCDF filename (under mask
   AUNZ:      "WAFS0P25_AUNZ.nc"
 
 # ---- metric parameters --------------------------------------------------
+
 thresholds:            # percentile thresholds for FSS and contingency metrics
   - 90.0
   - 95.0
@@ -124,9 +129,11 @@ window_sizes:          # spatial smoothing half-widths (grid points)
 threshold_mode: "independent"
 
 # ---- variable names -----------------------------------------------------
+
 obs_var_name: "precip"   # variable name to read from observation NetCDF files
 
 # ---- directories (all relative to base_dir unless absolute) -------------
+
 base_dir:   "."           # root directory; all other paths resolved against this
 fcst_dir:   "fcst"        # forecast NetCDF files
 obs_dir:    "obs/FIMERG"  # observation NetCDF files
@@ -138,6 +145,7 @@ log_dir:    "logs"        # run logs (when enable_logs: true)
 debug_dir:  "debug"       # intermediate debug outputs
 
 # ---- filename templates -------------------------------------------------
+
 observation_template: >-
   {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc
 
@@ -146,10 +154,12 @@ obs_vintage_preference:  # tried in order; first file found on disk is used
   - "LTE"
 
 # ---- I/O tuning ---------------------------------------------------------
+
 compression_level: 9    # zlib compression level for output NetCDF files (0–9)
 clip_buffer_deg: 1.0    # degrees of padding when clipping data to a region mask
 
 # ---- runtime flags ------------------------------------------------------
+
 verbose: false            # print extra debug output to stdout
 save_intermediate: false  # write intermediate regridded fields to debug_dir
 enable_logs: false        # write per-cycle log files to log_dir
@@ -199,6 +209,12 @@ Run tests with coverage report:
 
 ```bash
 pytest --cov=modvx tests/ --cov-report=term-missing
+```
+
+Run style checks with ruff:
+
+```bash
+ruff check src/modvx/ tests/
 ```
 
 ## License

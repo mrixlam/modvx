@@ -328,7 +328,7 @@ class TestExtractFssToCsv:
             "fbias": xr.DataArray([1.1, 1.0], dims=["valid_time_index"]),
             "ets": xr.DataArray([0.4, 0.5], dims=["valid_time_index"]),
         })
-        fname = "GLOBAL_FSS_1h_indep_thresh90percent_window3.nc"
+        fname = "modvx_metrics_GLOBAL_1h_indep_thresh90percent_window3.nc"
         ds.to_netcdf(odir / fname)
 
     def test_csv_written(self, tmp_path: Path) -> None:
@@ -597,7 +597,7 @@ class TestExtractFssToCsvLegacy:
 
         fss_data = np.array([0.5, 0.6, 0.7])
         da = xr.DataArray(fss_data, dims=["lead_time"])
-        fname = "GLOBAL_FSS_12h_indep_thresh90percent_window3.nc"
+        fname = "modvx_metrics_GLOBAL_12h_indep_thresh90percent_window3.nc"
         da.to_netcdf(str(nc_dir / fname))
 
         csv_dir = tmp_path / "csv"
@@ -641,7 +641,7 @@ class TestExtractFssToCsvLegacy:
             "fbias": ("lead_time", [1.0, 1.2]),
             "ets": ("lead_time", [0.4, 0.3]),
         })
-        fname = "TROPICS_FSS_12h_indep_thresh95percent_window5.nc"
+        fname = "modvx_metrics_TROPICS_12h_indep_thresh95percent_window5.nc"
         ds.to_netcdf(str(nc_dir / fname))
 
         csv_dir = tmp_path / "csv"

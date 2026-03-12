@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Command-line interface for modvx.
+Command-line interface for MODvx.
 
-This module defines the main entry point for the modvx verification toolkit when invoked from the command line. It handles argument parsing, configuration loading, and orchestrates the execution of the verification workflow by instantiating the TaskManager and ParallelProcessor. The CLI provides a user-friendly interface for running verification experiments with custom configurations and supports options for logging, output management, and parallel execution settings. By centralizing the CLI logic in this module, we can ensure a consistent user experience and provide a clear starting point for users to interact with the modvx toolkit.
+This module defines the main entry point for the MODvx verification toolkit when invoked from the command line. It handles argument parsing, configuration loading, and orchestrates the execution of the verification workflow by instantiating the TaskManager and ParallelProcessor. The CLI provides a user-friendly interface for running verification experiments with custom configurations and supports options for logging, output management, and parallel execution settings. By centralizing the CLI logic in this module, we can ensure a consistent user experience and provide a clear starting point for users to interact with the MODvx toolkit.
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -11,7 +11,6 @@ Email: mrislam@ucar.edu
 Date: February 2026
 Version: 1.0.0
 """
-
 from __future__ import annotations
 
 import sys
@@ -33,16 +32,16 @@ def configure_root_logging(config: ModvxConfig) -> None:
     Returns:
         None
     """
+    # Set log level to DEBUG if verbose mode is enabled, otherwise INFO.
     level = logging.DEBUG if config.verbose else logging.INFO
+
+    # Configure root logging with a consistent format and the determined log level.
     logging.basicConfig(
         level=level,
         format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         force=True,
     )
-
-# Backwards-compatible alias
-# _setup_logging = configure_root_logging
 
 
 def add_shared_cli_args(parser: argparse.ArgumentParser) -> None:
@@ -55,21 +54,17 @@ def add_shared_cli_args(parser: argparse.ArgumentParser) -> None:
     Returns:
         None
     """
+    # Common arguments for all subcommands
     parser.add_argument(
         "-c", "--config",
         type=str,
         default=None,
         help="Path to YAML configuration file (default: use built-in defaults).",
     )
+
+    # If verbose is specified, set it to True; otherwise, leave it as None 
     parser.add_argument("--verbose", action="store_true", default=None)
 
-# Backwards-compatible alias
-# Note: legacy short-name alias removed; use `add_shared_cli_args`.
-
-
-# ======================================================================
-# Subcommand: run
-# ======================================================================
 
 def build_run_subparser(sub: argparse._SubParsersAction) -> None:
     """
@@ -81,42 +76,74 @@ def build_run_subparser(sub: argparse._SubParsersAction) -> None:
     Returns:
         None
     """
+    # Create the 'run' subparser and add shared arguments
     p = sub.add_parser("run", help="Execute the FSS computation pipeline.")
+
+    # Add shared arguments like --config and --verbose
     add_shared_cli_args(p)
 
+    # Experiment name for labeling outputs and logs
     p.add_argument("--expname", dest="experiment_name", type=str, default=None)
+
+    # Specify the start of the verification period formatted as a datetime string 
     p.add_argument("--start", dest="initial_cycle_start", type=parse_datetime_string, default=None)
+
+    # Specify the end of the verification period formatted as a datetime string 
     p.add_argument("--end", dest="final_cycle_start", type=parse_datetime_string, default=None)
+
+    # Set the forecast step in hours (e.g., 6 for 6-hourly forecasts)
     p.add_argument("--forecast-step", dest="forecast_step_hours", type=int, default=None)
+
+    # Set the observation interval in hours (e.g., 1 for hourly observations)
     p.add_argument("--obs-interval", dest="observation_interval_hours", type=int, default=None)
+
+    # Set the cycle interval in hours (e.g., 24) 
     p.add_argument("--cycle-interval", dest="cycle_interval_hours", type=int, default=None)
+
+    # Set the forecast length in hours (e.g., 48) for each cycle.
     p.add_argument("--forecast-length", dest="forecast_length_hours", type=int, default=None)
+
+    # Set the target resolution to remap MPAS forecasts
     p.add_argument("--target-resolution", dest="target_resolution", type=str, default=None)
+
+    # Specify verification domains as a comma-separated string (e.g. "GLOBAL,TROPICS") 
     p.add_argument("--vxdomain", dest="vxdomain", type=str, default=None,
                    help="Comma-separated verification domains (e.g. GLOBAL,TROPICS).")
+    
+    # Control whether intermediate fields are saved to disk with an explicit flag.
     p.add_argument("--save-intermediate", dest="save_intermediate", action="store_true", default=None)
+
+    # Control logging with an explicit flag to enable logs
     p.add_argument("--logs", dest="enable_logs", action="store_true", default=None)
+
+    # Specify the required MPAS grid file path if using native MPAS unstructured data. 
     p.add_argument(
         "--mpas-grid-file", dest="mpas_grid_file", type=str, default=None,
         help="Path to MPAS grid file (relative to base_dir).",
     )
+
+    # Parallel backend selection for the run subcommand, with choices and a default of 'auto'.
     p.add_argument(
         "--backend", dest="backend", type=str, default="auto",
         choices=["auto", "mpi", "multiprocessing", "serial"],
         help="Parallel backend: auto (default), mpi, multiprocessing, serial.",
     )
+
+    # Specify the number of worker processes for the multiprocessing backend.
     p.add_argument(
         "--nprocs", dest="nprocs", type=int, default=None,
         help="Number of workers for multiprocessing backend (default: CPU count).",
     )
+
+    # Specify the shared observation cache directory for parallel workers. 
     p.add_argument(
         "--cache-dir", dest="cache_dir", type=str, default=None,
         help="Shared disk cache for accumulated observations. "
         "Auto-created as a temp dir when using multiprocessing if not specified.",
     )
-    p.set_defaults(func=handle_run_subcommand)
 
-# Note: legacy short-name alias removed; use `build_run_subparser`.
+    # Set the default function to handle this subcommand when invoked
+    p.set_defaults(func=handle_run_subcommand)
 
 
 def parse_vxdomain_tokens(raw: str) -> list[str]:
@@ -129,10 +156,8 @@ def parse_vxdomain_tokens(raw: str) -> list[str]:
     Returns:
         list[str]: Normalised, uppercase domain tokens.
     """
+    # Extract domain names by splitting on commas
     return [d.strip().upper() for d in raw.split(",")]
-
-# Backwards-compatible alias
-# _parse_vxdomain = parse_vxdomain_tokens
 
 
 def parse_target_resolution(raw: str) -> float | str:
@@ -145,14 +170,16 @@ def parse_target_resolution(raw: str) -> float | str:
     Returns:
         float | str: Numeric resolution in degrees when parseable, otherwise the original string token.
     """
+    # If the input is a special token like "obs" or "fcst", return it as-is without parsing.
     if raw in ("obs", "fcst"):
         return raw
+    
     try:
+        # If parsing succeeds, return the numeric value as a float.
         return float(raw)
     except ValueError:
+        # If parsing fails, return the original string 
         return raw
-
-# Note: legacy short-name alias removed; use `parse_target_resolution`.
 
 
 def resolve_observation_cache_dir(config: ModvxConfig, cli_cache_dir: str | None) -> str | None:
@@ -168,12 +195,16 @@ def resolve_observation_cache_dir(config: ModvxConfig, cli_cache_dir: str | None
     """
     import os
 
+    # CLI flag takes precedence over YAML config; if provided, use it directly.
     if cli_cache_dir:
         return cli_cache_dir
+    
+    # If the CLI flag was not used and the YAML config does not have a cache_dir
     if config.cache_dir is None:
         return os.path.join(config.resolve_relative_path(config.output_dir), ".obs_cache")
+    
+    # No override needed; the YAML config already has a cache_dir set and the CLI flag was not used.
     return None
-
 
 
 def handle_run_subcommand(args: argparse.Namespace) -> None:
@@ -189,31 +220,44 @@ def handle_run_subcommand(args: argparse.Namespace) -> None:
     from .parallel import ParallelProcessor
     from .task_manager import TaskManager
 
+    # Resolve the base configuration from the provided CLI arguments
     config = resolve_config_from_namespace(args)
 
-    # Collect all run-specific overrides and apply in one shot.
+    # Initialize a dictionary to hold any CLI overrides that need to be applied to the configuration before execution.
     overrides: dict = {}
+
+    # Apply CLI overrides for verification domains if provided
     if args.vxdomain is not None:
         overrides["vxdomain"] = parse_vxdomain_tokens(args.vxdomain)
+
+    # Apply CLI override for target resolution if provided
     if args.target_resolution is not None:
         overrides["target_resolution"] = parse_target_resolution(args.target_resolution)
+
+    # Apply CLI override for MPAS grid file if provided
     if args.mpas_grid_file is not None:
         overrides["mpas_grid_file"] = args.mpas_grid_file
+
+    # Determine the shared observation cache directory based on CLI and config values
     cache_dir = resolve_observation_cache_dir(config, args.cache_dir)
+
+    # Override the cache_dir in the configuration if a new path was resolved
     if cache_dir is not None:
         overrides["cache_dir"] = cache_dir
+
+    # Apply any collected CLI overrides to the configuration before proceeding with task execution.
     if overrides:
         config = apply_cli_overrides(config, overrides)
+
+    # Initialize the TaskManager with the resolved configuration to build the set of work units for execution.
     tm = TaskManager(config)
+
+    # Initialize the ParallelProcessor with the TaskManager's execute_work_unit method and the selected backend.
     pp = ParallelProcessor(tm.execute_work_unit, backend=args.backend, nprocs=args.nprocs)
+
+    # Run all work units in parallel using the selected backend. 
     pp.run(tm.build_work_units())
 
-# Note: legacy short-name alias removed; use `handle_run_subcommand`.
-
-
-# ======================================================================
-# Subcommand: extract-csv
-# ======================================================================
 
 def build_extract_subparser(sub: argparse._SubParsersAction) -> None:
     """
@@ -225,13 +269,20 @@ def build_extract_subparser(sub: argparse._SubParsersAction) -> None:
     Returns:
         None
     """
+    # Create the 'extract-csv' subparser and add shared arguments
     p = sub.add_parser("extract-csv", help="Extract FSS NetCDF results to CSV.")
-    add_shared_cli_args(p)
-    p.add_argument("--output-dir", type=str, default=None)
-    p.add_argument("--csv-dir", type=str, default=None)
-    p.set_defaults(func=handle_extract_subcommand)
 
-# Note: legacy short-name alias removed; use `build_extract_subparser`.
+    # Add shared arguments like --config and --verbose
+    add_shared_cli_args(p)
+
+    # Set the default function to handle this subcommand when invoked
+    p.add_argument("--output-dir", type=str, default=None)
+
+    # Set the default function to handle this subcommand when invoked
+    p.add_argument("--csv-dir", type=str, default=None)
+
+    # Set the default function to handle this subcommand when invoked
+    p.set_defaults(func=handle_extract_subcommand)
 
 
 def handle_extract_subcommand(args: argparse.Namespace) -> None:
@@ -246,17 +297,18 @@ def handle_extract_subcommand(args: argparse.Namespace) -> None:
     """
     from .file_manager import FileManager
 
+    # Resolve the base configuration from the provided CLI arguments
     config = resolve_config_from_namespace(args)
+
+    # Configure root logging based on the resolved configuration 
     configure_root_logging(config)
+
+    # Instantiate the FileManager with the resolved configuration 
     fm = FileManager(config)
+
+    # Extract FSS results from NetCDF files in the output directory and write CSV summaries
     fm.extract_fss_to_csv(output_dir=args.output_dir, csv_dir=args.csv_dir)
 
-# Note: legacy short-name alias removed; use `handle_extract_subcommand`.
-
-
-# ======================================================================
-# Subcommand: plot
-# ======================================================================
 
 def build_plot_subparser(sub: argparse._SubParsersAction) -> None:
     """
@@ -268,23 +320,40 @@ def build_plot_subparser(sub: argparse._SubParsersAction) -> None:
     Returns:
         None
     """
+    # Create the 'plot' subparser and add shared arguments
     p = sub.add_parser("plot", help="Generate metric vs lead-time plots.")
+
+    # Add shared arguments like --config and --verbose
     add_shared_cli_args(p)
+
+    # Specify the verification domain to plot (e.g., "GLOBAL", "TROPICS"). 
     p.add_argument("--domain", type=str, default=None)
+
+    # Specify the percentile threshold as a string (e.g., "0.1", "0.5", "obs")
     p.add_argument("--thresh", type=str, default=None)
+
+    # Specify the accumulation window size as a string (e.g., "1h", "3h", "6h") 
     p.add_argument("--window", type=str, default=None)
+
+    # Set the default function to handle this subcommand when invoked
     p.add_argument("--csv-dir", type=str, default=None)
+
+    # Set the default function to handle this subcommand when invoked
     p.add_argument("--output-dir", type=str, default=None)
+
+    # Optionally, specify a comma-separated list of metrics to plot (e.g., "fss,pod,csi"). 
     p.add_argument(
         "--metric", type=str, default=None,
         help="Comma-separated metric names to plot (e.g. fss,pod,csi). "
         "Default: all available metrics in the CSV.",
     )
+
+    # Generate plots for all combinations when the --all flag is provided
     p.add_argument("--all", dest="generate_all", action="store_true",
                    help="Generate plots for every (metric, domain, thresh, window) combination.")
-    p.set_defaults(func=handle_plot_subcommand)
 
-# Note: legacy short-name alias removed; use `build_plot_subparser`.
+    # Set the default function to handle this subcommand when invoked
+    p.set_defaults(func=handle_plot_subcommand)
 
 
 def handle_plot_subcommand(args: argparse.Namespace) -> None:
@@ -299,32 +368,37 @@ def handle_plot_subcommand(args: argparse.Namespace) -> None:
     """
     from .visualizer import Visualizer
 
+    # Resolve the base configuration from the provided CLI arguments
     config = resolve_config_from_namespace(args)
+
+    # Configure root logging based on the resolved configuration
     configure_root_logging(config)
+
+    # Instantiate the Visualizer with the resolved configuration 
     viz = Visualizer(config)
 
+    # Initialize the metrics variable to None
     metrics = None
+
+    # If the --metric argument is provided, parse it into a list of metric names to plot. 
     if args.metric:
         metrics = [m.strip().lower() for m in args.metric.split(",")]
 
     if args.generate_all:
+        # Generate plots for all combinations of metrics, domains, thresholds, and windows available
         viz.generate_all_plots(csv_dir=args.csv_dir, output_dir=args.output_dir, metrics=metrics)
     elif args.domain and args.thresh and args.window:
         for met in (metrics or ["fss"]):
+            # Generate a single plot for the specified metric, domain, threshold, and window combination.
             viz.plot_fss_vs_leadtime(
                 domain=args.domain, thresh=args.thresh, window=args.window,
                 csv_dir=args.csv_dir, output_dir=args.output_dir, metric=met,
             )
     else:
+        # If required arguments are missing for the single-plot case, print an error message and exit with code 1.
         print("Error: provide --domain, --thresh, --window  (or use --all).", file=sys.stderr)
         sys.exit(1)
 
-    # Note: legacy short-name alias removed; use `handle_plot_subcommand`.
-
-
-# ======================================================================
-# Subcommand: validate
-# ======================================================================
 
 def build_validate_subparser(sub: argparse._SubParsersAction) -> None:
     """
@@ -336,12 +410,17 @@ def build_validate_subparser(sub: argparse._SubParsersAction) -> None:
     Returns:
         None
     """
+    # Create the 'validate' subparser and add shared arguments
     p = sub.add_parser("validate", help="List available domains, thresholds, and windows.")
-    add_shared_cli_args(p)
-    p.add_argument("--csv-dir", type=str, default=None)
-    p.set_defaults(func=handle_validate_subcommand)
 
-# Note: legacy short-name alias removed; use `build_validate_subparser`.
+    # Add shared arguments like --config and --verbose
+    add_shared_cli_args(p)
+
+    # Set the default function to handle this subcommand when invoked
+    p.add_argument("--csv-dir", type=str, default=None)
+
+    # Set the default function to handle this subcommand when invoked
+    p.set_defaults(func=handle_validate_subcommand)
 
 
 def handle_validate_subcommand(args: argparse.Namespace) -> None:
@@ -356,25 +435,28 @@ def handle_validate_subcommand(args: argparse.Namespace) -> None:
     """
     from .visualizer import Visualizer
 
+    # Resolve the base configuration from the provided CLI arguments
     config = resolve_config_from_namespace(args)
+
+    # Configure root logging based on the resolved configuration
     configure_root_logging(config)
+
+    # Instantiate the Visualizer with the resolved configuration
     viz = Visualizer(config)
+
+    # List the unique domains, thresholds, and window sizes available in the CSV output directory.
     domains, thresholds, windows = viz.list_available_options(csv_dir=args.csv_dir)
 
+    # If no domains are found, print a message and exit with code 1 
     if domains is None:
         print("No CSV data found.")
         sys.exit(1)
 
+    # Print the available domains, thresholds, and windows in a user-friendly format.
     print(f"Domains:    {', '.join(domains)}")
     print(f"Thresholds: {', '.join(str(t) for t in thresholds)}")  # type: ignore[union-attr]
     print(f"Windows:    {', '.join(str(w) for w in windows)}")  # type: ignore[union-attr]
 
-# Note: legacy short-name alias removed; use `handle_validate_subcommand`.
-
-
-# ======================================================================
-# Config resolution helper
-# ======================================================================
 
 def resolve_config_from_namespace(args: argparse.Namespace) -> ModvxConfig:
     """
@@ -387,12 +469,16 @@ def resolve_config_from_namespace(args: argparse.Namespace) -> ModvxConfig:
         ModvxConfig: Fully resolved configuration with YAML defaults and CLI overrides merged.
     """
     if args.config:
+        # Load the base configuration from the specified YAML file if the --config argument is provided
         cfg = load_config_from_yaml(args.config)
     else:
+        # Otherwise, start with the default configuration values
         cfg = ModvxConfig()
 
-    # Collect numeric-override fields
+    # Initialize an empty dictionary to collect CLI overrides
     overrides = {}
+
+    # Check for each potential override field in the args namespace and add it to the overrides dict 
     for field_name in (
         "experiment_name",
         "initial_cycle_start",
@@ -409,42 +495,55 @@ def resolve_config_from_namespace(args: argparse.Namespace) -> ModvxConfig:
         if val is not None:
             overrides[field_name] = val
 
+    # Apply any collected CLI overrides to the configuration
     if overrides:
         cfg = apply_cli_overrides(cfg, overrides)
+
+    # Return the resolved configuration object 
     return cfg
 
-
-
-# ======================================================================
-# Entry-point
-# ======================================================================
 
 def main(argv: Optional[List[str]] = None) -> None:
     """
     Entry point for the ``modvx`` command-line interface installed via setuptools. Constructs the top-level argument parser with four subcommands: ``run``, ``extract-csv``, ``plot``, and ``validate``. Each subcommand is registered by its dedicated builder function. After parsing, the subcommand's handler is dispatched via the ``func`` default set on each subparser.
 
     Parameters:
-        argv (list of str, optional): Argument list to parse; defaults to ``sys.argv[1:]``
-            when None.
+        argv (list of str, optional): Argument list to parse; defaults to ``sys.argv[1:]`` when None.
 
     Returns:
         None
     """
+    # Capture the command-line arguments
     parser = argparse.ArgumentParser(
         prog="modvx",
-        description="Model Verification Toolkit — Fraction Skill Score pipeline",
+        description="Model Verification Toolkit for MPAS Precipitation Forecasts",
     )
+
+    # Create subparsers for the different commands 
     sub = parser.add_subparsers(dest="command")
+
+    # Make the subcommand required 
     sub.required = True
 
+    # Build the run subparser for executing the metric computation pipeline.
     build_run_subparser(sub)
+
+    # Build the extract-csv subparser for extracting FSS results from NetCDF files into CSV summaries.
     build_extract_subparser(sub)
+
+    # Build the plot subparser for generating metric-vs-leadtime plots from CSV summaries.
     build_plot_subparser(sub)
+
+    # Build the validate subparser for listing available domains, thresholds, and windows in the CSV output directory.
     build_validate_subparser(sub)
 
+    # Parse the command-line arguments
     args = parser.parse_args(argv)
+
+    # Dispatch to the appropriate subcommand handler 
     args.func(args)
 
 
+# Invoke the main function when this script is executed directly
 if __name__ == "__main__":
     main()
