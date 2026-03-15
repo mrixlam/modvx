@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class PerfMetrics:
     """
-    Calculate spatial verification metrics for forecast precipitation fields. The primary metric implemented is the NaN-aware Fraction Skill Score (FSS), which quantifies the spatial accuracy of precipitation forecasts at varying neighbourhood scales and intensity thresholds. Contingency-table metrics (POD, FAR, CSI/TS, FBIAS, ETS) are also supported and computed from the same binary exceedance masks used by FSS. Additional point-wise metrics (RMSE, bias) are provided as static utility methods. The batch interface sweeps all (threshold × window) combinations in one pass.
+    Calculate spatial verification metrics for forecast precipitation fields. The primary metric implemented is the NaN-aware Fraction Skill Score (FSS), which quantifies the spatial accuracy of precipitation forecasts at varying neighbourhood scales and intensity thresholds. Contingency-table metrics (POD, FAR, CSI/TS, FBIAS, ETS) are also supported and computed from the same binary exceedance masks used by FSS. Additional point-wise metrics (RMSE, bias) are provided as static utility methods. Batch helpers compute FSS across (threshold × window) combinations and contingency metrics across thresholds.
 
     Parameters:
         config (ModvxConfig): Run configuration with threshold lists, window sizes, and threshold mode settings.
@@ -482,6 +482,64 @@ class PerfMetrics:
         return (hits - hits_random) / denom if denom != 0 else float("nan")
 
 
+    def compute_contingency_batch(
+        self,
+        forecast_da: xr.DataArray,
+        observation_da: xr.DataArray,
+        thresholds: Optional[List[float]] = None,
+        *,
+        experiment_name: str = "",
+        cycle_start: Optional[datetime.datetime] = None,
+        valid_time: Optional[datetime.datetime] = None,
+        save_intermediate: bool = False,
+    ) -> Dict[float, Dict[str, float]]:
+        """
+        Compute contingency-table metrics for every percentile threshold. These metrics are derived from binary exceedance masks and are independent of neighbourhood window size. Results are returned as a dictionary keyed by ``threshold`` mapping to a metrics dictionary.
+
+        Parameters:
+            forecast_da (xr.DataArray): Co-located, masked forecast precipitation field.
+            observation_da (xr.DataArray): Co-located, masked observation precipitation field.
+            thresholds (list of float, optional): Percentile thresholds to evaluate; defaults to config.thresholds.
+            experiment_name (str): Experiment name passed through for intermediate file naming.
+            cycle_start (datetime.datetime, optional): Cycle start time for intermediate files.
+            valid_time (datetime.datetime, optional): Valid time for intermediate files.
+            save_intermediate (bool): Whether to save intermediate binary mask files.
+
+        Returns:
+            Dict[float, Dict[str, float]]: Mapping of ``threshold`` to a dictionary with keys ``pod``, ``far``, ``csi``, ``fbias``, ``ets``.
+        """
+        # If thresholds is None, use the default from the configuration.
+        thresholds = thresholds or self.config.thresholds
+
+        # Initialize an empty dictionary to hold results for each threshold.
+        results: Dict[float, Dict[str, float]] = {}
+
+        for threshold in thresholds:
+            # Compute observation and forecast binary masks once per threshold
+            forecast_binary, observation_binary = self._make_binary_masks(
+                forecast_da, observation_da, threshold,
+                save_intermediate=save_intermediate,
+                cycle_start=cycle_start, valid_time=valid_time,
+            )
+
+            # Compute contingency metrics once per threshold since they do not depend on window size
+            contingency_metrics = self._compute_contingency_metrics(forecast_binary, observation_binary)
+
+            # Log the results for this threshold, including all computed metrics.
+            logger.info(
+                "Contingency (Threshold: %.1f%%): POD=%.4f FAR=%.4f CSI=%.4f FBIAS=%.4f ETS=%.4f",
+                threshold,
+                contingency_metrics["pod"], contingency_metrics["far"],
+                contingency_metrics["csi"], contingency_metrics["fbias"], contingency_metrics["ets"],
+            )
+
+            # Store the results in the dictionary keyed by threshold.
+            results[threshold] = contingency_metrics
+
+        # Return a dictionary keyed by threshold with all computed contingency metrics.
+        return results
+
+
     def compute_fss_batch(
         self,
         forecast_da: xr.DataArray,
@@ -495,7 +553,7 @@ class PerfMetrics:
         save_intermediate: bool = False,
     ) -> Dict[Tuple[float, int], Dict[str, float]]:
         """
-        Compute FSS and contingency-table metrics for every (threshold, window) combination. Binary masks are computed once per threshold and reused across all window sizes for that threshold, avoiding redundant percentile and masking work. Contingency-table metrics (POD, FAR, CSI, FBIAS, ETS) are window-independent and are therefore computed once per threshold then copied into each window entry. FSS is computed per (threshold, window) pair as it depends on the neighbourhood size. Results are returned as a dictionary keyed by ``(threshold, window_size)`` mapping to a metrics dictionary.
+        Compute FSS for every (threshold, window) combination. Binary masks are computed once per threshold and reused across all window sizes for that threshold, avoiding redundant percentile and masking work. FSS is computed per (threshold, window) pair as it depends on the neighbourhood size. Results are returned as a dictionary keyed by ``(threshold, window_size)`` mapping to a metrics dictionary containing only FSS.
 
         Parameters:
             forecast_da (xr.DataArray): Co-located, masked forecast precipitation field.
@@ -508,7 +566,7 @@ class PerfMetrics:
             save_intermediate (bool): Whether to save intermediate binary mask files.
 
         Returns:
-            Dict[Tuple[float, int], Dict[str, float]]: Mapping of ``(threshold, window_size)`` to a dictionary with keys ``fss``, ``pod``, ``far``, ``csi``, ``fbias``, ``ets``.
+            Dict[Tuple[float, int], Dict[str, float]]: Mapping of ``(threshold, window_size)`` to a dictionary with key ``fss``.
         """
         # If thresholds is None, use the default from the configuration.
         thresholds = thresholds or self.config.thresholds
@@ -527,9 +585,6 @@ class PerfMetrics:
                 cycle_start=cycle_start, valid_time=valid_time,
             )
 
-            # Compute contingency metrics once per threshold since they do not depend on window size
-            contingency_metrics = self._compute_contingency_metrics(forecast_binary, observation_binary)
-
             for window_size in window_sizes:
                 # Compute the forecast fractional field once per window size
                 forecast_fractional_field = self.compute_fractional_field(forecast_binary, window_size)
@@ -540,17 +595,14 @@ class PerfMetrics:
                 # Compute FSS for this threshold and window size using the pre-computed fractional fields.
                 fss_value = self._fss_from_fractions(forecast_fractional_field, observation_fractional_field)
 
-                # Log the results for this threshold and window size, including all computed metrics.
+                # Log the results for this threshold and window size.
                 logger.info(
-                    "FSS (Threshold: %.1f%%, Window: %d): %.6f | "
-                    "POD=%.4f FAR=%.4f CSI=%.4f FBIAS=%.4f ETS=%.4f",
+                    "FSS (Threshold: %.1f%%, Window: %d): %.6f",
                     threshold, window_size, fss_value,
-                    contingency_metrics["pod"], contingency_metrics["far"],
-                    contingency_metrics["csi"], contingency_metrics["fbias"], contingency_metrics["ets"],
                 )
 
                 # Store the results in the dictionary keyed by (threshold, window_size).
-                results[(threshold, window_size)] = {"fss": fss_value, **contingency_metrics}
+                results[(threshold, window_size)] = {"fss": fss_value}
 
         # Return a nested dictionary keyed by (threshold, window_size) with all computed metrics for each combination.
         return results

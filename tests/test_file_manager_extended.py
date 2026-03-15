@@ -249,18 +249,18 @@ class TestSaveIntermediateBinary:
 # -----------------------------------------------------------------------
 
 class TestSaveFssResults:
-    """Tests for save_fss_results writing multi-metric NetCDF files."""
+    """Tests for save_fss_results writing FSS NetCDF files."""
 
-    def test_writes_all_metrics(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
+    def test_writes_fss_only(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
         """
-        Verify that save_fss_results writes a NetCDF file containing all six metric variables. The method should create one file per cycle-region-threshold-window combination and include fss, pod, far, csi, fbias, and ets arrays of the correct length. This test confirms both that the file is created and that all expected variables are present with the correct number of lead-time entries.
+        Verify that save_fss_results writes a NetCDF file containing only the FSS variable. The method should create one file per cycle-region-threshold-window combination and include a fss array of the correct length. This test confirms both that the file is created and that the expected variable is present with the correct number of lead-time entries.
 
         Returns:
             None
         """
         metrics_list = [
-            {"fss": 0.8, "pod": 0.7, "far": 0.2, "csi": 0.6, "fbias": 1.1, "ets": 0.4},
-            {"fss": 0.85, "pod": 0.75, "far": 0.15, "csi": 0.65, "fbias": 1.0, "ets": 0.5},
+            {"fss": 0.8},
+            {"fss": 0.85},
         ]
         cycle_start = datetime.datetime(2024, 9, 17, 0, 0)
 
@@ -271,9 +271,10 @@ class TestSaveFssResults:
         assert len(nc_files) == 1
 
         ds = xr.open_dataset(nc_files[0])
-        for key in ["fss", "pod", "far", "csi", "fbias", "ets"]:
-            assert key in ds
-            assert len(ds[key]) == 2
+        assert "fss" in ds
+        assert len(ds["fss"]) == 2
+        for key in ["pod", "far", "csi", "fbias", "ets"]:
+            assert key not in ds
         ds.close()
 
     def test_filename_encoding(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
@@ -283,7 +284,7 @@ class TestSaveFssResults:
         Returns:
             None
         """
-        metrics_list = [{"fss": 0.5, "pod": 0.5, "far": 0.5, "csi": 0.5, "fbias": 1.0, "ets": 0.3}]
+        metrics_list = [{"fss": 0.5}]
         cycle_start = datetime.datetime(2024, 9, 17, 0, 0)
 
         fm.save_fss_results(metrics_list, cycle_start, "TROPICS", 97.5, 5)
@@ -292,9 +293,127 @@ class TestSaveFssResults:
         nc_files = list(output_dir.rglob("*.nc"))
         assert len(nc_files) == 1
         name = nc_files[0].name
-        assert "TROPICS" in name
-        assert "window5" in name
+        assert "tropics" in name
+        assert "_window" in name
         assert "97p5" in name or "97.5" in name
+
+
+# -----------------------------------------------------------------------
+# save_contingency_results
+# -----------------------------------------------------------------------
+
+class TestSaveContingencyResults:
+    """Tests for save_contingency_results writing contingency NetCDF files."""
+
+    def test_writes_contingency_metrics(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
+        """
+        Verify that save_contingency_results writes a NetCDF file containing contingency metric variables. The method should create one file per cycle-region-threshold combination and include pod, far, csi, fbias, and ets arrays of the correct length.
+
+        Returns:
+            None
+        """
+        metrics_list = [
+            {"pod": 0.7, "far": 0.2, "csi": 0.6, "fbias": 1.1, "ets": 0.4},
+            {"pod": 0.75, "far": 0.15, "csi": 0.65, "fbias": 1.0, "ets": 0.5},
+        ]
+        cycle_start = datetime.datetime(2024, 9, 17, 0, 0)
+
+        fm.save_contingency_results(metrics_list, cycle_start, "GLOBAL", 90.0)
+
+        output_dir = Path(tmp_cfg.base_dir) / tmp_cfg.output_dir
+        nc_files = list(output_dir.rglob("*.nc"))
+        assert len(nc_files) == 1
+
+        ds = xr.open_dataset(nc_files[0])
+        for key in ["pod", "far", "csi", "fbias", "ets"]:
+            assert key in ds
+            assert len(ds[key]) == 2
+        assert "fss" not in ds
+        ds.close()
+
+    def test_filename_encoding(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
+        """
+        Verify that the contingency NetCDF filename encodes the region name and threshold value without a window size.
+
+        Returns:
+            None
+        """
+        metrics_list = [{"pod": 0.5, "far": 0.5, "csi": 0.5, "fbias": 1.0, "ets": 0.3}]
+        cycle_start = datetime.datetime(2024, 9, 17, 0, 0)
+
+        fm.save_contingency_results(metrics_list, cycle_start, "TROPICS", 97.5)
+
+        output_dir = Path(tmp_cfg.base_dir) / tmp_cfg.output_dir
+        nc_files = list(output_dir.rglob("*.nc"))
+        assert len(nc_files) == 1
+        name = nc_files[0].name
+        assert "tropics" in name
+        assert "nbhd" not in name
+        assert "97p5" in name or "97.5" in name
+
+
+# -----------------------------------------------------------------------
+# Forecast cache layers
+# -----------------------------------------------------------------------
+
+class TestForecastCaching:
+    """Tests for forecast cache paths in accumulate_forecasts."""
+
+    def test_memory_cache_hit(self, tmp_path: Path) -> None:
+        """
+        Verify that accumulate_forecasts returns the cached array directly when a memory cache entry exists. The in-memory cache avoids invoking the raw accumulation path on repeated access for the same valid time.
+
+        Returns:
+            None
+        """
+        cfg = ModvxConfig(
+            base_dir=str(tmp_path),
+            experiment_name="test_exp",
+            forecast_step_hours=1,
+            mpas_grid_file="grid/mesh.nc",
+        )
+        fm = FileManager(cfg)
+
+        vt = datetime.datetime(2024, 9, 17, 0)
+        key = fm._forecast_cache_key("2024091700", vt)
+        cached = xr.DataArray(np.ones((2, 2)), dims=["latitude", "longitude"])
+        fm._fcst_mem_cache[key] = cached
+
+        with patch.object(fm, "_compute_forecast_accumulation") as mock_compute:
+            result = fm.accumulate_forecasts(vt, "2024091700")
+
+        mock_compute.assert_not_called()
+        np.testing.assert_array_equal(result.values, cached.values)
+
+    def test_disk_cache_hit(self, tmp_path: Path) -> None:
+        """
+        Verify that accumulate_forecasts loads from a disk cache entry when the memory cache is empty. The disk cache allows reuse across processes without recomputing accumulations.
+
+        Returns:
+            None
+        """
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        cfg = ModvxConfig(
+            base_dir=str(tmp_path),
+            cache_dir=str(cache_dir),
+            experiment_name="test_exp",
+            forecast_step_hours=1,
+            mpas_grid_file="grid/mesh.nc",
+        )
+        fm = FileManager(cfg)
+
+        vt = datetime.datetime(2024, 9, 17, 0)
+        key = fm._forecast_cache_key("2024091700", vt)
+        da = xr.DataArray(np.arange(4.0), dims=["x"])
+        da.to_netcdf(cache_dir / f"{key}.nc")
+
+        with patch.object(fm, "_compute_forecast_accumulation") as mock_compute:
+            result = fm.accumulate_forecasts(vt, "2024091700")
+
+        mock_compute.assert_not_called()
+        np.testing.assert_array_equal(result.values, da.values)
 
 
 # -----------------------------------------------------------------------
@@ -306,7 +425,7 @@ class TestExtractFssToCsv:
 
     def _create_output_tree(self, base: Path) -> None:
         """
-        Create a realistic output directory tree with a multi-metric FSS NetCDF file for extract_fss_to_csv tests. The tree mirrors the directory structure produced by the live pipeline: output/exp/ExtendedFC/init/pp1h/. A file named using the standard encoding convention is written with two lead-time entries across all six metrics so that the CSV extractor can exercise its full parsing logic.
+        Create a realistic output directory tree with separate FSS and contingency NetCDF files for extract_fss_to_csv tests. The tree mirrors the directory structure produced by the live pipeline: output/exp/ExtendedFC/init/pp1h/. Files are written with two lead-time entries so that the CSV extractor can exercise its full parsing logic.
 
         Parameters:
             base (Path): Root temporary directory under which the output tree will be created.
@@ -320,16 +439,21 @@ class TestExtractFssToCsv:
         )
         odir.mkdir(parents=True, exist_ok=True)
 
-        ds = xr.Dataset({
+        fss_ds = xr.Dataset({
             "fss": xr.DataArray([0.8, 0.85], dims=["valid_time_index"]),
+        })
+        fss_name = "modvx_metrics_type_neighborhood_global_1h_indep_thresh90p0percent_window3.nc"
+        fss_ds.to_netcdf(odir / fss_name)
+
+        cont_ds = xr.Dataset({
             "pod": xr.DataArray([0.7, 0.75], dims=["valid_time_index"]),
             "far": xr.DataArray([0.2, 0.15], dims=["valid_time_index"]),
             "csi": xr.DataArray([0.6, 0.65], dims=["valid_time_index"]),
             "fbias": xr.DataArray([1.1, 1.0], dims=["valid_time_index"]),
             "ets": xr.DataArray([0.4, 0.5], dims=["valid_time_index"]),
         })
-        fname = "modvx_metrics_GLOBAL_1h_indep_thresh90percent_window3.nc"
-        ds.to_netcdf(odir / fname)
+        cont_name = "modvx_metrics_type_contingency_global_1h_indep_thresh90p0percent.nc"
+        cont_ds.to_netcdf(odir / cont_name)
 
     def test_csv_written(self, tmp_path: Path) -> None:
         """
@@ -357,7 +481,7 @@ class TestExtractFssToCsv:
         assert "fss" in df.columns
         assert "pod" in df.columns
         assert "leadTime" in df.columns
-        assert len(df) == 2
+        assert len(df) == 4
 
     def test_no_files_logs_zero(self, tmp_path: Path) -> None:
         """
@@ -597,7 +721,7 @@ class TestExtractFssToCsvLegacy:
 
         fss_data = np.array([0.5, 0.6, 0.7])
         da = xr.DataArray(fss_data, dims=["lead_time"])
-        fname = "modvx_metrics_GLOBAL_12h_indep_thresh90percent_window3.nc"
+        fname = "modvx_metrics_type_neighborhood_global_12h_indep_thresh90p0percent_window3.nc"
         da.to_netcdf(str(nc_dir / fname))
 
         csv_dir = tmp_path / "csv"
@@ -641,7 +765,7 @@ class TestExtractFssToCsvLegacy:
             "fbias": ("lead_time", [1.0, 1.2]),
             "ets": ("lead_time", [0.4, 0.3]),
         })
-        fname = "modvx_metrics_TROPICS_12h_indep_thresh95percent_window5.nc"
+        fname = "modvx_metrics_type_neighborhood_tropics_12h_indep_thresh95p0percent_window5.nc"
         ds.to_netcdf(str(nc_dir / fname))
 
         csv_dir = tmp_path / "csv"
@@ -659,7 +783,52 @@ class TestExtractFssToCsvLegacy:
         df = pd.read_csv(str(csv_file))
         assert len(df) == 2
         assert df["pod"].tolist() == [0.9, 0.7]
-        assert df["domain"].iloc[0] == "TROPICS"
+        assert df["domain"].iloc[0] == "tropics"
+
+
+# -----------------------------------------------------------------------
+# Internal parsing helpers
+# -----------------------------------------------------------------------
+
+class TestFileManagerParsingHelpers:
+    """Tests for internal parsing helper branches."""
+
+    def test_extract_file_context_no_output(self) -> None:
+        """
+        Verify that _extract_file_context returns None when the path lacks an 'output' segment.
+
+        Returns:
+            None
+        """
+        result = FileManager._extract_file_context("/tmp/experiment/ExtendedFC/2024091700/pp1h/file.nc")
+        assert result is None
+
+    def test_parse_metric_values_fallback_length(self) -> None:
+        """
+        Verify that _parse_metric_values falls back to the first data variable for length when no metric key matches.
+
+        Returns:
+            None
+        """
+        ds = xr.Dataset({"other": xr.DataArray([1.0, 2.0, 3.0], dims=["x"])})
+        length, metrics = FileManager._parse_metric_values(ds, ["fss"])
+        assert length == 3
+        assert len(metrics["fss"]) == 3
+        assert np.isnan(metrics["fss"]).all()
+
+    def test_parse_metric_values_legacy_fss(self) -> None:
+        """
+        Verify that _parse_metric_values reads legacy FSS values from __xarray_dataarray_variable__.
+
+        Returns:
+            None
+        """
+        ds = xr.Dataset({
+            "__xarray_dataarray_variable__": xr.DataArray([0.1, 0.2], dims=["x"])
+        })
+        length, metrics = FileManager._parse_metric_values(ds, ["fss"])
+        assert length == 2
+        np.testing.assert_allclose(metrics["fss"], [0.1, 0.2])
 
 
 # -----------------------------------------------------------------------

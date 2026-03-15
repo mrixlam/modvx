@@ -154,14 +154,18 @@ class TestParseFilenameMetadata:
         """
         Verify that parse_filename_metadata correctly extracts the domain, threshold, and window fields from a standard FSS output filename. The returned dictionary must contain all three keys with values matching the literal tokens encoded in the filename, since these are used to reconstruct plot labels and filter results during post-processing. This test uses a 'GLOBAL' domain with an integer-valued threshold to cover the most common output filename pattern.
         """
-        m = parse_fss_filename_metadata("modvx_metrics_GLOBAL_12h_indep_thresh90p0percent_window3.nc")
-        assert m == {"domain": "GLOBAL", "thresh": "90.0", "window": "3"}
+        m = parse_fss_filename_metadata(
+            "modvx_metrics_type_neighborhood_global_12h_indep_thresh90p0percent_window3.nc"
+        )
+        assert m == {"domain": "global", "thresh": "90.0", "window": "3"}
 
     def test_decimal_thresh(self) -> None:
         """
         Confirm that parse_filename_metadata correctly extracts a decimal threshold value such as 97.5 from the 'p'-separated filename encoding. The extracted threshold string must be the reconstructed decimal form '97.5' rather than the raw 'p'-encoded form '97p5', so that it can be used directly in plot labels and numeric comparisons. This test covers the tropical 97.5th percentile threshold, which is among the most frequently used non-integer thresholds in the verification configuration.
         """
-        m = parse_fss_filename_metadata("modvx_metrics_TROPICS_6h_indep_thresh97p5percent_window11.nc")
+        m = parse_fss_filename_metadata(
+            "modvx_metrics_type_neighborhood_tropics_6h_indep_thresh97p5percent_window11.nc"
+        )
         assert m is not None
         assert m["thresh"] == "97.5"
 
@@ -222,7 +226,7 @@ class TestParseFilenameMissingParts:
         Returns:
             None
         """
-        result = parse_fss_filename_metadata("modvx_metrics_GLOBAL_12h_indep_window5.nc")
+        result = parse_fss_filename_metadata("modvx_metrics_type_neighborhood_global_1h_window15.nc")
         assert result is None
 
     def test_parse_filename_missing_window(self) -> None:
@@ -232,5 +236,5 @@ class TestParseFilenameMissingParts:
         Returns:
             None
         """
-        result = parse_fss_filename_metadata("modvx_metrics_GLOBAL_12h_indep_thresh90percent.nc")
+        result = parse_fss_filename_metadata("modvx_metrics_type_neighborhood_global_1h_indep_thresh90p0percent.nc")
         assert result is None

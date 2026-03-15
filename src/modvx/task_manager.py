@@ -159,9 +159,12 @@ class TaskManager:
         cycle_init_str: str,
         cycle_start: datetime.datetime,
         region_mask: Any,
-    ) -> Dict[Tuple[float, int], Dict[str, float]]:
+    ) -> Tuple[
+        Dict[Tuple[float, int], Dict[str, float]],
+        Dict[float, Dict[str, float]],
+    ]:
         """
-        This helper drives the per-timestep pipeline for a single valid_time: it loads accumulated forecast and observation fields via :class:`FileManager`, prepares them with :class:`DataValidator` (regridding and masking), optionally writes intermediate debug fields, and delegates to :meth:`PerfMetrics.compute_fss_batch` to calculate all threshold/window combinations. The returned dictionary maps ``(threshold, window)`` to the computed metrics for that valid time.
+        This helper drives the per-timestep pipeline for a single valid_time: it loads accumulated forecast and observation fields via :class:`FileManager`, prepares them with :class:`DataValidator` (regridding and masking), optionally writes intermediate debug fields, computes FSS over all threshold/window combinations, and computes window-independent contingency metrics per threshold.
 
         Parameters:
             valid_time (datetime.datetime): Start of the accumulation window.
@@ -170,7 +173,8 @@ class TaskManager:
             region_mask (Any): Region mask DataArray used for domain masking.
 
         Returns:
-            Dict[Tuple[float, int], Dict[str, float]]: Mapping of ``(threshold, window)`` to metric dicts.
+            Tuple[Dict[Tuple[float, int], Dict[str, float]], Dict[float, Dict[str, float]]]:
+                ``(fss_results, contingency_results)`` for the valid time.
         """
         # Extract the config for easy access within this method.
         config = self.config
@@ -192,14 +196,34 @@ class TaskManager:
                 forecast_data, observation_data, cycle_start, valid_time,
             )
 
-        # Return the full batch of FSS metrics for all (threshold, window) combinations for this valid time. 
-        return self.perf_metrics.compute_fss_batch(
+        # Compute the FSS batch for all (threshold, window) combinations for this valid time.
+        fss_results = self.perf_metrics.compute_fss_batch(
             forecast_data, observation_data,
             experiment_name=config.experiment_name,
             cycle_start=cycle_start,
             valid_time=valid_time,
             save_intermediate=config.save_intermediate,
         )
+
+        # Compute contingency metrics once per threshold.
+        thresholds = sorted({threshold for threshold, _ in fss_results.keys()})
+
+        # Initialize an empty dictionary to hold contingency results by threshold
+        contingency_by_threshold = {}
+
+        # Only compute contingency metrics if there are thresholds defined in the config, otherwise skip this step 
+        if thresholds:
+            contingency_by_threshold = self.perf_metrics.compute_contingency_batch(
+                forecast_data, observation_data,
+                thresholds=thresholds,
+                experiment_name=config.experiment_name,
+                cycle_start=cycle_start,
+                valid_time=valid_time,
+                save_intermediate=False,
+            )
+
+        # Return the FSS and contingency results for this valid time.
+        return fss_results, contingency_by_threshold
 
     def _persist_cycle_results(
         self,
@@ -245,9 +269,53 @@ class TaskManager:
             cycle_init_str, region_name, num_valid_times, num_param_combinations,
         )
 
+    def _persist_contingency_results(
+        self,
+        results_by_threshold: Dict[float, List[Dict[str, float]]],
+        cycle_start: datetime.datetime,
+        region_name: str,
+        cycle_init_str: str,
+        num_valid_times: int,
+    ) -> None:
+        """
+        This function writes one NetCDF result file per threshold using :class:`FileManager.save_contingency_results`. It guards against the empty-result case by logging a warning rather than raising an exception, and logs a completion summary including the number of valid times and thresholds processed.
+
+        Parameters:
+            results_by_threshold (Dict[float, List[Dict[str, float]]]): Collected contingency metrics per threshold across the cycle.
+            cycle_start (datetime.datetime): Cycle start time used for file paths.
+            region_name (str): Verification domain name.
+            cycle_init_str (str): Cycle initialisation string in ``YYYYmmddHH`` format.
+            num_valid_times (int): Number of valid times attempted in the cycle.
+
+        Returns:
+            None
+        """
+        # Calculate the total number of thresholds for logging purposes.
+        num_thresholds = len(self.config.thresholds)
+
+        # Handle the case where all valid times failed and no contingency results were collected
+        if not results_by_threshold:
+            logger.warning(
+                "No contingency results for %s / %s — all valid times failed",
+                cycle_init_str, region_name,
+            )
+            return
+
+        # Iterate over the collected contingency results for each threshold and save them in batch using FileManager.
+        for threshold, metrics_list in results_by_threshold.items():
+            self.file_manager.save_contingency_results(
+                metrics_list, cycle_start, region_name, threshold,
+            )
+
+        # Log a summary of the completed cycle and region for visibility into progress and performance.
+        logger.info(
+            "Completed contingency %s / %s — %d valid times × %d thresholds",
+            cycle_init_str, region_name, num_valid_times, num_thresholds,
+        )
+
     def execute_work_unit(self, work_unit: Dict[str, Any]) -> None:
         """
-        Execute a single (cycle, region) work-unit and persist all FSS results. For each valid time within the cycle, forecast and observation data are loaded and prepared exactly once, then the full (threshold × window) FSS parameter sweep is performed via PerfMetrics.compute_fss_batch. This design eliminates the redundant I/O and regridding that would occur if each (threshold, window) pair were a separate work-unit. FSS values are accumulated per parameter combination and saved in batch at the end of the cycle.
+        Execute a single (cycle, region) work-unit and persist all FSS and contingency results. For each valid time within the cycle, forecast and observation data are loaded and prepared exactly once, then the full (threshold × window) FSS parameter sweep is performed alongside window-independent contingency metrics computed per threshold. This design eliminates the redundant I/O and regridding that would occur if each (threshold, window) pair were a separate work-unit. FSS values are accumulated per parameter combination and saved in batch at the end of the cycle.
 
         Parameters:
             work_unit (dict): Work-unit dictionary with keys ``cycle_start``, ``region_name``, and ``mask_path``.
@@ -292,19 +360,24 @@ class TaskManager:
             iterate_valid_times(cycle_start, cycle_start + config.forecast_length, config.forecast_step)
         )
 
-        # Initialize a dictionary to accumulate FSS results by (threshold, window) across all valid times in the cycle. 
+        # Initialize dictionaries to accumulate metrics across all valid times in the cycle.
         results_by_parameter: Dict[Tuple[float, int], List[Dict[str, float]]] = defaultdict(list)
+        results_by_threshold: Dict[float, List[Dict[str, float]]] = defaultdict(list)
 
         for valid_time in valid_times:
             try:
                 # Compute all FSS metrics for the current valid time across the full parameter sweep.
-                batch_results = self._compute_metrics_for_valid_time(
+                fss_results, contingency_results = self._compute_metrics_for_valid_time(
                     valid_time, cycle_init_str, cycle_start, region_mask,
                 )
 
-                # Accumulate results by parameter combination for batch persistence at the end of the cycle. 
-                for (threshold, window_size), metrics_dict in batch_results.items():
+                # Accumulate FSS results by (threshold, window) for batch persistence at the end of the cycle. 
+                for (threshold, window_size), metrics_dict in fss_results.items():
                     results_by_parameter[(threshold, window_size)].append(metrics_dict)
+
+                # Accumulate contingency results by threshold for batch persistence at the end of the cycle.
+                for threshold, metrics_dict in contingency_results.items():
+                    results_by_threshold[threshold].append(metrics_dict)
             except Exception:
                 # Catch all exceptions to ensure that one failed valid time doesn't prevent the entire cycle from being processed. 
                 logger.warning(
@@ -314,6 +387,7 @@ class TaskManager:
 
         # Persist all results for the cycle after processing all valid times, even if some valid times failed. 
         self._persist_cycle_results(results_by_parameter, cycle_start, region_name, cycle_init_str, len(valid_times))
+        self._persist_contingency_results(results_by_threshold, cycle_start, region_name, cycle_init_str, len(valid_times))
 
 
     def run(self) -> None:

@@ -180,7 +180,8 @@ class TestExecuteWorkUnit:
              patch.object(tm.file_manager, "accumulate_forecasts", return_value=fcst), \
              patch.object(tm.file_manager, "accumulate_observations", return_value=obs), \
              patch.object(tm.data_validator, "prepare", return_value=(fcst, obs)), \
-             patch.object(tm.file_manager, "save_fss_results") as mock_save:
+             patch.object(tm.file_manager, "save_fss_results") as mock_save_fss, \
+             patch.object(tm.file_manager, "save_contingency_results") as mock_save_cont:
 
             unit = {
                 "cycle_start": datetime.datetime(2024, 9, 17, 0, 0),
@@ -188,7 +189,8 @@ class TestExecuteWorkUnit:
                 "mask_path": "G004_GLOBAL.nc",
             }
             tm.execute_work_unit(unit)
-            assert mock_save.call_count > 0
+            assert mock_save_fss.call_count > 0
+            assert mock_save_cont.call_count > 0
 
     def test_skips_failing_valid_times(self, tmp_cfg: ModvxConfig) -> None:
         """
@@ -207,7 +209,8 @@ class TestExecuteWorkUnit:
 
         with patch.object(tm.file_manager, "load_region_mask", return_value=(mock_mask, "mask")), \
              patch.object(tm.file_manager, "accumulate_forecasts", side_effect=FileNotFoundError), \
-             patch.object(tm.file_manager, "save_fss_results") as mock_save:
+             patch.object(tm.file_manager, "save_fss_results") as mock_save_fss, \
+             patch.object(tm.file_manager, "save_contingency_results") as mock_save_cont:
 
             unit = {
                 "cycle_start": datetime.datetime(2024, 9, 17, 0, 0),
@@ -216,7 +219,8 @@ class TestExecuteWorkUnit:
             }
             tm.execute_work_unit(unit)
             # All valid times failed, so no save occurs
-            mock_save.assert_not_called()
+            mock_save_fss.assert_not_called()
+            mock_save_cont.assert_not_called()
 
     def test_save_intermediate_flag(self, tmp_cfg: ModvxConfig) -> None:
         """
@@ -245,7 +249,8 @@ class TestExecuteWorkUnit:
              patch.object(tm.file_manager, "accumulate_observations", return_value=obs), \
              patch.object(tm.data_validator, "prepare", return_value=(fcst, obs)), \
              patch.object(tm.file_manager, "save_intermediate_precip") as mock_precip, \
-             patch.object(tm.file_manager, "save_fss_results"):
+             patch.object(tm.file_manager, "save_fss_results"), \
+             patch.object(tm.file_manager, "save_contingency_results"):
 
             unit = {
                 "cycle_start": datetime.datetime(2024, 9, 17, 0, 0),

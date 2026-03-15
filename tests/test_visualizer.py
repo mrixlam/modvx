@@ -29,6 +29,7 @@ from modvx.visualizer import (
     _ALL_METRICS,
     _BOUNDED_METRICS,
     _METRIC_LABELS,
+    _WINDOW_INDEPENDENT_METRICS,
 )
 
 import matplotlib
@@ -51,19 +52,33 @@ def _make_csv(csv_dir: Path, experiment: str = "exp1") -> Path:
         Path: Absolute path to the written CSV file.
     """
     csv_dir.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame({
+    fss_df = pd.DataFrame({
         "initTime": ["2024091700"] * 6,
         "leadTime": [1, 2, 3, 4, 5, 6],
         "domain": ["GLOBAL"] * 6,
         "thresh": [90.0] * 6,
         "window": [3] * 6,
         "fss": [0.6, 0.65, 0.7, 0.72, 0.75, 0.78],
+        "pod": [np.nan] * 6,
+        "far": [np.nan] * 6,
+        "csi": [np.nan] * 6,
+        "fbias": [np.nan] * 6,
+        "ets": [np.nan] * 6,
+    })
+    cont_df = pd.DataFrame({
+        "initTime": ["2024091700"] * 6,
+        "leadTime": [1, 2, 3, 4, 5, 6],
+        "domain": ["GLOBAL"] * 6,
+        "thresh": [90.0] * 6,
+        "window": [np.nan] * 6,
+        "fss": [np.nan] * 6,
         "pod": [0.5, 0.55, 0.6, 0.62, 0.65, 0.68],
         "far": [0.3, 0.28, 0.25, 0.22, 0.20, 0.18],
         "csi": [0.4, 0.45, 0.5, 0.52, 0.55, 0.58],
         "fbias": [1.1, 1.05, 1.0, 0.98, 0.95, 0.93],
         "ets": [0.2, 0.25, 0.3, 0.32, 0.35, 0.38],
     })
+    df = pd.concat([fss_df, cont_df], ignore_index=True)
     csv_path = csv_dir / f"{experiment}.csv"
     df.to_csv(csv_path, index=False)
     return csv_path
@@ -129,6 +144,149 @@ class TestConstants:
         """
         assert "fss" in _BOUNDED_METRICS
         assert "fbias" not in _BOUNDED_METRICS
+
+
+# -----------------------------------------------------------------------
+# Internal helpers
+# -----------------------------------------------------------------------
+
+class TestHelperFilters:
+    """Coverage for internal helper branches."""
+
+    def test_filter_df_matches_window(self) -> None:
+        """
+        Verify that _filter_df returns only rows matching domain, threshold, and window.
+
+        Returns:
+            None
+        """
+        df = pd.DataFrame({
+            "domain": ["GLOBAL", "GLOBAL"],
+            "thresh": [90.0, 90.0],
+            "window": [3, 5],
+        })
+        filtered = Visualizer._filter_df(df, "GLOBAL", 90.0, 3)
+        assert len(filtered) == 1
+        assert int(filtered["window"].iloc[0]) == 3
+
+    def test_aggregate_metric_missing_column(self, tmp_path: Path) -> None:
+        """
+        Verify that _aggregate_metric returns None when the requested metric column is missing.
+
+        Returns:
+            None
+        """
+        csv_dir = tmp_path / "csv"
+        csv_dir.mkdir()
+        pd.DataFrame({
+            "domain": ["GLOBAL"],
+            "thresh": [90.0],
+            "window": [3],
+            "leadTime": [1],
+            "fss": [0.5],
+        }).to_csv(csv_dir / "exp1.csv", index=False)
+
+        result = Visualizer._aggregate_metric(csv_dir / "exp1.csv", "GLOBAL", 90.0, 3, "pod")
+        assert result is None
+
+    def test_aggregate_metric_window_required(self, tmp_path: Path) -> None:
+        """
+        Verify that _aggregate_metric returns None when window is missing for a window-dependent metric.
+
+        Returns:
+            None
+        """
+        csv_dir = tmp_path / "csv"
+        csv_dir.mkdir()
+        pd.DataFrame({
+            "domain": ["GLOBAL"],
+            "thresh": [90.0],
+            "window": [3],
+            "leadTime": [1],
+            "fss": [0.5],
+        }).to_csv(csv_dir / "exp1.csv", index=False)
+
+        result = Visualizer._aggregate_metric(csv_dir / "exp1.csv", "GLOBAL", 90.0, None, "fss")
+        assert result is None
+
+    def test_aggregate_metric_window_independent(self, tmp_path: Path) -> None:
+        """
+        Verify that _aggregate_metric ignores window for threshold-only metrics.
+
+        Returns:
+            None
+        """
+        csv_dir = tmp_path / "csv"
+        csv_dir.mkdir()
+        pd.DataFrame({
+            "domain": ["GLOBAL"],
+            "thresh": [90.0],
+            "window": [np.nan],
+            "leadTime": [1],
+            "pod": [0.6],
+        }).to_csv(csv_dir / "exp1.csv", index=False)
+
+        result = Visualizer._aggregate_metric(csv_dir / "exp1.csv", "GLOBAL", 90.0, None, "pod")
+        assert result is not None
+        assert result.iloc[0] == pytest.approx(0.6)
+
+    def test_set_y_limits_no_valid(self) -> None:
+        """
+        Verify that _set_y_limits returns without error when no finite values exist.
+
+        Returns:
+            None
+        """
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots()
+        Visualizer._set_y_limits(ax, [np.nan, np.nan], "fss")
+        plt.close(fig)
+
+
+class TestLeadtimeTicks:
+    """Coverage for lead-time tick helpers."""
+
+    def test_leadtime_tick_interval(self, tmp_path: Path) -> None:
+        """
+        Verify that lead-time tick intervals follow forecast length rules.
+
+        Returns:
+            None
+        """
+        cfg = ModvxConfig(base_dir=str(tmp_path), forecast_length_hours=12)
+        viz = Visualizer(cfg)
+        assert viz._leadtime_tick_interval() == 1
+
+        cfg = ModvxConfig(base_dir=str(tmp_path), forecast_length_hours=24)
+        viz = Visualizer(cfg)
+        assert viz._leadtime_tick_interval() == 3
+
+        cfg = ModvxConfig(base_dir=str(tmp_path), forecast_length_hours=48)
+        viz = Visualizer(cfg)
+        assert viz._leadtime_tick_interval() == 6
+
+        cfg = ModvxConfig(base_dir=str(tmp_path), forecast_length_hours=72)
+        viz = Visualizer(cfg)
+        assert viz._leadtime_tick_interval() == 12
+
+    def test_apply_leadtime_ticks(self, tmp_path: Path) -> None:
+        """
+        Verify that _apply_leadtime_ticks applies ticks using the configured interval.
+
+        Returns:
+            None
+        """
+        import matplotlib.pyplot as plt
+
+        cfg = ModvxConfig(base_dir=str(tmp_path), forecast_length_hours=24)
+        viz = Visualizer(cfg)
+        fig, ax = plt.subplots()
+        viz._apply_leadtime_ticks(ax, [1, 2, 3, 24])
+        ticks = ax.get_xticks()
+        assert ticks[0] == pytest.approx(3)
+        assert ticks[-1] >= 24
+        plt.close(fig)
 
 
 # -----------------------------------------------------------------------
@@ -217,6 +375,37 @@ class TestPlotFssVsLeadtime:
         # Plot is still saved (empty), returns the path
         assert result is not None
 
+    def test_window_independent_metric(self, viz_setup) -> None:
+        """
+        Verify that plot_fss_vs_leadtime works with window-independent metrics when window is None.
+
+        Returns:
+            None
+        """
+        viz, csv_dir, plot_dir = viz_setup
+        result = viz.plot_fss_vs_leadtime(
+            domain="GLOBAL", thresh="90", window=None,
+            csv_dir=str(csv_dir), output_dir=str(plot_dir),
+            metric="pod",
+        )
+        assert result is not None
+        assert "window" not in os.path.basename(result)
+
+    def test_window_required_missing(self, viz_setup) -> None:
+        """
+        Verify that plot_fss_vs_leadtime returns None when window is missing for a window-dependent metric.
+
+        Returns:
+            None
+        """
+        viz, csv_dir, plot_dir = viz_setup
+        result = viz.plot_fss_vs_leadtime(
+            domain="GLOBAL", thresh="90", window=None,
+            csv_dir=str(csv_dir), output_dir=str(plot_dir),
+            metric="fss",
+        )
+        assert result is None
+
 
 # -----------------------------------------------------------------------
 # plot_fss_difference
@@ -282,6 +471,27 @@ class TestPlotFssDifference:
         )
         assert result is None
 
+    def test_window_required_missing(self, tmp_path: Path) -> None:
+        """
+        Verify that plot_fss_difference returns None when window is missing for a window-dependent metric.
+
+        Returns:
+            None
+        """
+        csv_dir = tmp_path / "csv"
+        plot_dir = tmp_path / "plots"
+        _make_csv(csv_dir, "control")
+
+        cfg = ModvxConfig(base_dir=str(tmp_path))
+        viz = Visualizer(cfg)
+        result = viz.plot_fss_difference(
+            control_experiment="control",
+            domain="GLOBAL", thresh="90", window=None,
+            csv_dir=str(csv_dir), output_dir=str(plot_dir),
+            metric="fss",
+        )
+        assert result is None
+
 
 # -----------------------------------------------------------------------
 # generate_all_plots
@@ -331,6 +541,32 @@ class TestGenerateAllPlots:
         count = viz.generate_all_plots(csv_dir=str(tmp_path / "empty"))
         assert count == 0
 
+    def test_window_independent_only(self, tmp_path: Path) -> None:
+        """
+        Verify that generate_all_plots handles window-independent metrics without requiring window values.
+
+        Returns:
+            None
+        """
+        csv_dir = tmp_path / "csv"
+        plot_dir = tmp_path / "plots"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({
+            "initTime": ["2024091700"],
+            "leadTime": [1],
+            "domain": ["GLOBAL"],
+            "thresh": [90.0],
+            "window": [np.nan],
+            "pod": [0.6],
+        }).to_csv(csv_dir / "exp1.csv", index=False)
+
+        cfg = ModvxConfig(base_dir=str(tmp_path), csv_dir=str(csv_dir), plot_dir=str(plot_dir))
+        viz = Visualizer(cfg)
+        count = viz.generate_all_plots(
+            csv_dir=str(csv_dir), output_dir=str(plot_dir), metrics=["pod"],
+        )
+        assert count == 1
+
 
 # -----------------------------------------------------------------------
 # list_available_options
@@ -365,6 +601,30 @@ class TestListAvailableOptions:
         assert d is None
         assert t is None
         assert w is None
+
+    def test_drops_nan_windows(self, tmp_path: Path) -> None:
+        """
+        Verify that list_available_options drops NaN window values.
+
+        Returns:
+            None
+        """
+        csv_dir = tmp_path / "csv"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({
+            "domain": ["GLOBAL", "GLOBAL"],
+            "thresh": [90.0, 90.0],
+            "window": [np.nan, 3],
+            "leadTime": [1, 1],
+            "fss": [0.5, 0.6],
+        }).to_csv(csv_dir / "exp1.csv", index=False)
+
+        cfg = ModvxConfig(base_dir=str(tmp_path), csv_dir=str(csv_dir))
+        viz = Visualizer(cfg)
+        domains, thresholds, windows = viz.list_available_options(csv_dir=str(csv_dir))
+        assert domains == ["GLOBAL"]
+        assert thresholds == [90.0]
+        assert windows == [3]
 
 
 # -----------------------------------------------------------------------

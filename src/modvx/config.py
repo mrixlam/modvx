@@ -11,7 +11,6 @@ Email: mrislam@ucar.edu
 Date: February 2026
 Version: 1.0.0
 """
-
 from __future__ import annotations
 
 import yaml
@@ -102,8 +101,8 @@ class ModvxConfig:
     output_dir: str = "output"
     debug_dir: str = "debug"
     log_dir: str = "logs"
-    csv_dir: str = "fss_csv"
-    plot_dir: str = "fss_plots"
+    csv_dir: str = "csv"
+    plot_dir: str = "plots"
     cache_dir: Optional[str] = None
 
     # Specify the template for constructing observation file paths

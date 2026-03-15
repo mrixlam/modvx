@@ -69,8 +69,8 @@ mask_dir: "masks"
 output_dir: "output"
 debug_dir:  "debug"
 log_dir:    "logs"
-csv_dir:    "fss_csv"
-plot_dir:   "fss_plots"
+csv_dir:    "csv"
+plot_dir:   "plots"
 
 # ---- filename templates ------------------------------------------------
 observation_template: >-

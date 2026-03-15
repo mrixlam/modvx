@@ -464,11 +464,11 @@ class TestETS:
 
 
 class TestBatchMetrics:
-    """Tests for the extended compute_fss_batch return structure verifying that all contingency-table metrics are present alongside FSS for each (threshold, window) entry."""
+    """Tests for the separate batch helpers for FSS and contingency metrics."""
 
-    def test_batch_returns_all_metrics(self, pm: PerfMetrics) -> None:
+    def test_fss_batch_returns_fss_only(self, pm: PerfMetrics) -> None:
         """
-        Verify that compute_fss_batch returns a dictionary where each value is itself a dictionary containing fss, pod, far, csi, fbias, and ets keys. This test uses a perfect-forecast scenario of identical fields to confirm the metric keys are present and that FSS equals 1.0. The remaining metrics are checked for type consistency (float) rather than exact values, since their correct computation is covered by the individual metric-class tests.
+        Verify that compute_fss_batch returns a dictionary where each value contains only the FSS key. This test uses a perfect-forecast scenario of identical fields to confirm the FSS key is present and that FSS equals 1.0.
 
         Returns:
             None
@@ -486,10 +486,32 @@ class TestBatchMetrics:
         key = (90.0, 3)
         assert key in results
         metrics = results[key]
-        for expected_key in ("fss", "pod", "far", "csi", "fbias", "ets"):
-            assert expected_key in metrics, f"Missing key: {expected_key}"
-            assert isinstance(metrics[expected_key], float)
+        assert set(metrics.keys()) == {"fss"}
         assert metrics["fss"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_contingency_batch_returns_metrics(self, pm: PerfMetrics) -> None:
+        """
+        Verify that compute_contingency_batch returns per-threshold contingency metrics that are window-independent. This test uses identical fields to ensure perfect contingency scores when events are present.
+
+        Returns:
+            None
+        """
+        field = xr.DataArray(
+            np.linspace(0.0, 1.0, 100).reshape(10, 10),
+            dims=["latitude", "longitude"],
+        )
+        results = pm.compute_contingency_batch(
+            field, field,
+            thresholds=[50.0],
+        )
+        assert 50.0 in results
+        metrics = results[50.0]
+        assert set(metrics.keys()) == {"pod", "far", "csi", "fbias", "ets"}
+        assert metrics["pod"] == pytest.approx(1.0)
+        assert metrics["far"] == pytest.approx(0.0)
+        assert metrics["csi"] == pytest.approx(1.0)
+        assert metrics["fbias"] == pytest.approx(1.0)
+        assert metrics["ets"] == pytest.approx(1.0)
 
 
 # -----------------------------------------------------------------------
@@ -559,7 +581,7 @@ class TestPerfMetricsNumpyBranches:
 
     def test_compute_fss_batch_save_intermediate(self, pm: PerfMetrics) -> None:
         """
-        Verify that compute_fss_batch calls save_intermediate_binary on the FileManager when save_intermediate is True. The batch method should delegate to calculate_fss for each (threshold, window) combination and honour the save_intermediate flag for each call. This test mocks the FileManager and confirms the save method is called exactly once for the single-entry batch confirming proper delegation.
+        Verify that compute_fss_batch calls save_intermediate_binary on the FileManager when save_intermediate is True. This test mocks the FileManager and confirms the save method is called exactly once for the single-entry batch, confirming proper propagation of the save_intermediate flag.
 
         Returns:
             None

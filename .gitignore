@@ -6,6 +6,11 @@ __pycache__/
 # Distribution / packaging
 build/
 dist/
+MPASdiag/
+csv/
+plots/
+tests/testdata/data/output
+
 *.egg-info/
 *.egg
 

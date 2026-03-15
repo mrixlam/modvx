@@ -177,7 +177,7 @@ def standardize_coords(data_array: xr.DataArray) -> xr.DataArray:
 
 def parse_fss_filename_metadata(filename: str) -> dict | None:
     """
-    Extract domain, threshold, and window metadata from a standardised FSS NetCDF filename. The expected filename pattern is ``modvx_metrics_<domain>_<Nh>h_indep_thresh<T>percent_window<W>.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). This function is used during CSV extraction to parse result files without opening them. Returns ``None`` when the filename does not conform to the expected pattern.
+    Extract domain, threshold, and window metadata from a standardised FSS NetCDF filename. The expected filename pattern is ``modvx_metrics_type_neighborhood_<domain>_<Nh>h_indep_thresh<T>percent_window<W>.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). This function is used during CSV extraction to parse result files without opening them. Returns ``None`` when the filename does not conform to the expected pattern.
 
     Parameters:
         filename (str): NetCDF filename to parse, with or without the ``.nc`` extension.
@@ -189,7 +189,7 @@ def parse_fss_filename_metadata(filename: str) -> dict | None:
     name = filename.replace(".nc", "")
 
     # Extract verification domain name using a regular expression
-    domain_match = re.match(r"^modvx_metrics_(.+?)_\d+h_indep_", name)
+    domain_match = re.match(r"^modvx_metrics_type_neighborhood_(.+?)_\d+h_indep_", name)
 
     # Return None if no matching domain name found
     if not domain_match:
@@ -220,6 +220,43 @@ def parse_fss_filename_metadata(filename: str) -> dict | None:
 
     # Return the extracted metadata as a dictionary
     return {"domain": domain, "thresh": thresh, "window": window}
+
+
+def parse_contingency_filename_metadata(filename: str) -> dict | None:
+    """
+    Extract domain and threshold metadata from a standardised contingency NetCDF filename. The expected filename pattern is ``modvx_metrics_type_contingency_<domain>_<Nh>h_indep_thresh<T>percent.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). Returns ``None`` when the filename does not conform to the expected pattern.
+
+    Parameters:
+        filename (str): NetCDF filename to parse, with or without the ``.nc`` extension.
+
+    Returns:
+        dict or None: Dictionary with keys ``"domain"`` and ``"thresh"`` if the pattern matches, or ``None`` if the filename cannot be parsed.
+    """
+    # Remove the .nc extension if present to simplify regex matching
+    name = filename.replace(".nc", "")
+
+    # Extract verification domain name using a regular expression
+    domain_match = re.match(r"^modvx_metrics_type_contingency_(.+?)_\d+h_indep_", name)
+
+    # Return None if no matching domain name found
+    if not domain_match:
+        return None
+
+    # Extract the domain name
+    domain = domain_match.group(1)
+
+    # Extract threshold value using a regular expression
+    thresh_match = re.search(r"thresh([\d.p]+)percent", name)
+
+    # Return None if no matching threshold value found
+    if not thresh_match:
+        return None
+
+    # Extract the threshold information
+    thresh = thresh_match.group(1).replace("p", ".")
+
+    # Return the extracted metadata as a dictionary
+    return {"domain": domain, "thresh": thresh}
 
 
 def extract_lead_time_hours_from_path(path_str: str) -> int | None:

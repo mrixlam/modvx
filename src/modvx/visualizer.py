@@ -49,6 +49,9 @@ _METRIC_LABELS: dict[str, str] = {
 # Metrics bounded within [0, 1]; others get dynamic y-limits.
 _BOUNDED_METRICS = {"fss", "pod", "far", "csi"}
 
+# Metrics that do not depend on neighbourhood window size
+_WINDOW_INDEPENDENT_METRICS = {"pod", "far", "csi", "fbias", "ets"}
+
 
 class Visualizer:
     """
@@ -128,7 +131,7 @@ class Visualizer:
         csv_file: Path,
         domain: str,
         thresh_val: float,
-        window_val: int,
+        window_val: Optional[int],
         metric: str,
     ) -> Optional["pd.Series[float]"]:
         """
@@ -152,8 +155,28 @@ class Visualizer:
             logger.warning("Metric '%s' not in %s — skipping", metric, csv_file.name)
             return None
         
-        # Apply filtering to select rows matching the specified domain, threshold and window criteria. 
-        filtered_df = Visualizer._filter_df(results_df, domain, thresh_val, window_val)
+        if metric in _WINDOW_INDEPENDENT_METRICS:
+            # Filter without window for threshold-only metrics.
+            mask = (
+                (results_df["domain"] == domain)
+                & (results_df["thresh"] == thresh_val)
+            )
+        else:
+            # Window-dependent metrics require a window value.
+            if window_val is None:
+                logger.warning("Window required for metric '%s'", metric)
+                return None
+            mask = (
+                (results_df["domain"] == domain)
+                & (results_df["thresh"] == thresh_val)
+                & (results_df["window"] == window_val)
+            )
+
+        # Drop rows where the metric is missing to avoid mixing file types.
+        mask = mask & results_df[metric].notna()
+
+        # Apply filtering to select rows matching the specified criteria.
+        filtered_df = cast(pd.DataFrame, results_df.loc[mask])
 
         # Log a warning and return None if the filtered DataFrame is empty, indicating no matching rows for the specified criteria in this CSV file.
         if filtered_df.empty:
@@ -203,6 +226,64 @@ class Visualizer:
         
         # Specify the y-axis limits on the provided axis object 
         ax.set_ylim(ymin, ymax)
+
+
+    def _leadtime_tick_interval(self) -> int:
+        """
+        Determine the x-axis tick interval for lead-time plots based on the configured forecast length.
+
+        Returns:
+            int: Lead-time tick interval in hours.
+        """
+        # Determine the lead-time tick interval based on the forecast length configured in the Visualizer's associated ModvxConfig. 
+        forecast_length_hours = self.config.forecast_length_hours
+
+        # For short forecast lengths up to 12 hours, use a 1-hour interval
+        if forecast_length_hours <= 12:
+            return 1
+        
+        # For forecast lengths between 12 and 24 hours, use a 3-hour interval 
+        if forecast_length_hours <= 24:
+            return 3
+        
+        # For forecast lengths between 24 and 48 hours, use a 6-hour interval 
+        if forecast_length_hours <= 48:
+            return 6
+        
+        # Return a 12-hour interval for forecast lengths greater than 48 hours
+        return 12
+
+
+    def _apply_leadtime_ticks(self, ax: "Any", lead_times: list[float]) -> None:
+        """
+        Apply lead-time ticks to the x-axis using the configured interval.
+
+        Parameters:
+            ax (Any): Matplotlib Axes-like object on which to set x-ticks.
+            lead_times (list[float]): Available lead-time values used to bound ticks.
+
+        Returns:
+            None
+        """
+        # If there are no lead times provided, return without setting ticks 
+        if not lead_times:
+            return
+
+        # Determine the lead-time tick interval using the helper method 
+        step = self._leadtime_tick_interval()
+
+        # Calculate the minimum and maximum lead times from the provided list 
+        min_lead = float(min(lead_times))
+        max_lead = float(max(lead_times))
+
+        # Calculate the starting tick position based on the minimum lead time and the step interval.
+        start = step if min_lead > 0 else 0
+
+        # Generate an array of tick positions starting from the calculated start, up to the maximum lead time, with the determined step interval.
+        ticks = np.arange(start, max_lead + step, step)
+
+        # Set the x-ticks on the provided axis object to the calculated tick positions
+        ax.set_xticks(ticks)
 
 
     @staticmethod
@@ -258,7 +339,7 @@ class Visualizer:
         self,
         domain: str = "GLOBAL",
         thresh: str = "90",
-        window: str = "3",
+        window: Optional[str] = "3",
         csv_dir: Optional[str] = None,
         output_dir: Optional[str] = None,
         metric: str = "fss",
@@ -290,9 +371,21 @@ class Visualizer:
             logger.warning("No CSV files found in %s", csv_dir)
             return None
 
-        # Convert the threshold and window strings to their appropriate numeric types
+        # Convert the threshold string to a float for filtering
         thresh_val = float(thresh)
-        window_val = int(window)
+
+        # Convert the window string to an integer for window-dependent metrics
+        window_val: Optional[int] = None
+
+        # Only convert the window string to an integer if the metric is not in the list of window-independent metrics. 
+        if metric not in _WINDOW_INDEPENDENT_METRICS:
+            # Log a warning and return None if the metric requires a window value but none is provided
+            if window is None:
+                logger.warning("Window is required for metric '%s'", metric)
+                return None
+            
+            # Convert the window string to an integer
+            window_val = int(window)
 
         # Get a human-friendly label for the metric to use in plot titles and axis labels
         metric_label = _METRIC_LABELS.get(metric, metric.upper())
@@ -303,8 +396,9 @@ class Visualizer:
         # Generate unique colors for each experiment using a colormap
         colors = plt.get_cmap("tab10")(np.linspace(0, 1, len(csv_files)))
 
-        # Initialize a list to collect all metric values across experiments 
+        # Initialize lists to collect all metric values and lead times across experiments for dynamic axis limits and ticks
         all_values: list[float] = []
+        lead_times: list[float] = []
 
         # Iterate over all CSV files, aggregate the metric series for each experiment and specified filtering criteria
         for file_idx, csv_file in enumerate(csv_files):
@@ -318,6 +412,9 @@ class Visualizer:
             # Convert the metric values to a NumPy array of floats for consistent numerical processing and plotting
             mean_values = experiment_series.to_numpy(dtype=float)
 
+            # Collect lead times for consistent x-axis ticks
+            lead_times.extend(experiment_series.index.to_numpy(dtype=float).tolist())
+
             # Extend the all_values list with the mean metric values from this experiment 
             all_values.extend(mean_values.tolist())
 
@@ -328,12 +425,27 @@ class Visualizer:
                 label=csv_file.stem, color=colors[file_idx],
             )
 
-        # Set y-axis limits based on the aggregated metric values across all experiments
+        # Set y-axis limits based on the collected metric values across all experiments 
         if all_values:
             self._set_y_limits(ax, all_values, metric)
 
-        # Specify the filename for the plot using the metric, domain, threshold and window to create a descriptive name.
-        fname = f"{metric}_leadtime_{domain}_thresh{thresh}percent_window{window}.png"
+        # Apply lead-time ticks based on the collected lead times across all experiments 
+        if lead_times:
+            self._apply_leadtime_ticks(ax, lead_times)
+
+        # Specify the filename for the plot using the metric, domain, threshold and (optional) window.
+        if window_val is None:
+            fname = f"{metric}_vs_leadtime_vxdomain_{domain.lower()}_thresh_pct{thresh.replace('.', 'p')}.png"
+            title = f"{metric_label} vs Lead Time | Domain: {domain}, Threshold: {thresh}%"
+        else:
+            fname = (
+                f"{metric}_vs_leadtime_vxdomain_{domain.lower()}_"
+                f"thresh_pct{thresh.replace('.', 'p')}_nbhd_pts{window}.png"
+            )
+            title = (
+                f"{metric_label} vs Lead Time | Domain: {domain}, "
+                f"Threshold: {thresh}%, Window: {window}"
+            )
 
         # Ensure the output directory exists before saving the figure
         out = os.path.join(output_dir, fname)
@@ -343,7 +455,7 @@ class Visualizer:
             fig, ax,
             xlabel="Lead Time (hours)",
             ylabel=metric_label,
-            title=f"{metric_label} vs Lead Time | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
+            title=title,
             out_path=out,
         )
 
@@ -359,7 +471,7 @@ class Visualizer:
         control_experiment: str,
         domain: str = "GLOBAL",
         thresh: str = "90",
-        window: str = "3",
+        window: Optional[str] = "3",
         csv_dir: Optional[str] = None,
         output_dir: Optional[str] = None,
         metric: str = "fss",
@@ -398,8 +510,18 @@ class Visualizer:
         # Convert the threshold string to a float for filtering purposes
         thresh_val = float(thresh)
 
-        # Convert the window string to an integer 
-        window_val = int(window)
+        # Convert the window string to an integer for window-dependent metrics
+        window_val: Optional[int] = None
+
+        # Only convert the window string to an integer if the metric is not in the list of window-independent metrics.
+        if metric not in _WINDOW_INDEPENDENT_METRICS:
+            # Log a warning and return None if the metric requires a window value but none is provided
+            if window is None:
+                logger.warning("Window is required for metric '%s'", metric)
+                return None
+            
+            # Convert the window string to an integer for filtering purposes
+            window_val = int(window)
 
         # Construct the expected path to the control experiment's CSV file
         control_path = Path(csv_dir) / f"{control_experiment}.csv"
@@ -452,8 +574,19 @@ class Visualizer:
         # Add a horizontal line at y=0 to indicate no difference between experiment and control
         ax.axhline(0, color="k", linestyle="--", linewidth=0.8)
 
-        # Specify the filename for the difference plot 
-        fname = f"{metric}_diff_{domain}_thresh{thresh}percent_window{window}.png"
+        # Apply lead-time ticks based on the control series range
+        self._apply_leadtime_ticks(ax, control_series.index.to_numpy(dtype=float).tolist())
+
+        # Specify the filename for the difference plot
+        if window_val is None:
+            fname = f"{metric}_diff_{domain}_thresh{thresh}percent.png"
+            title = f"{metric_label} Difference | Domain: {domain}, Threshold: {thresh}%"
+        else:
+            fname = f"{metric}_diff_{domain}_thresh{thresh}percent_nbhd_pts{window}.png"
+            title = (
+                f"{metric_label} Difference | Domain: {domain}, "
+                f"Threshold: {thresh}%, Window: {window}"
+            )
 
         # Ensure the output directory exists before saving the figure
         out = os.path.join(output_dir, fname)
@@ -463,7 +596,7 @@ class Visualizer:
             fig, ax,
             xlabel="Lead Time (hours)",
             ylabel=f"Δ{metric_label} (exp − {control_experiment})",
-            title=f"{metric_label} Difference | Domain: {domain}, Threshold: {thresh}%, Window: {window}",
+            title=title,
             out_path=out,
         )
 
@@ -590,36 +723,54 @@ class Visualizer:
         # Extract the list of threshold values as strings for consistent filename generation
         thresholds = sorted(sample_df["thresh"].unique().tolist())
 
-        # Extract the list of unique window values as strings for consistent filename generation
-        windows = sorted(sample_df["window"].unique().tolist())
+        # Extract the list of unique window values, dropping NaN from threshold-only rows
+        windows = sorted(
+            int(x) for x in sample_df["window"].dropna().unique().tolist()
+        )
 
         # Compute the total number of plot combinations for logging purposes.
-        total = len(metrics) * len(domains) * len(thresholds) * len(windows)
+        window_dependent = [m for m in metrics if m not in _WINDOW_INDEPENDENT_METRICS]
+        window_independent = [m for m in metrics if m in _WINDOW_INDEPENDENT_METRICS]
+
+        # The total number of plots is the sum of window-dependent combinations and window-independent combinations 
+        total = (
+            len(window_dependent) * len(domains) * len(thresholds) * len(windows)
+            + len(window_independent) * len(domains) * len(thresholds)
+        )
 
         # Log the total number of plots that will be generated 
         logger.info(
-            "Generating %d plots for %d metrics × %d domains × %d thresholds × %d windows",
-            total, len(metrics), len(domains), len(thresholds), len(windows),
+            "Generating %d plots for %d metrics × %d domains × %d thresholds",
+            total, len(metrics), len(domains), len(thresholds),
         )
 
         # Initialize a counter to track the number of successfully generated plots.
         count = 0
 
         # Iterate over all combinations of metrics, domains, thresholds and windows
-        for metric, domain, threshold, window in product(metrics, domains, thresholds, windows):
-            try:
-                # Save the plot for the current combination and increment the count if successful. 
-                self.plot_fss_vs_leadtime(
-                    domain=str(domain), thresh=str(threshold), window=str(window),
-                    csv_dir=csv_dir, output_dir=output_dir, metric=metric,
-                )
-
-                # Increment the count of successfully generated plots for this combination.
-                count += 1
-            except Exception:
-                # Log any exceptions that occur during plot generation for this combination as a warning
-                logger.warning("Failed: metric=%s domain=%s thresh=%s win=%s",
-                               metric, domain, threshold, window, exc_info=True)
+        for metric, domain, threshold in product(metrics, domains, thresholds):
+            if metric in _WINDOW_INDEPENDENT_METRICS:
+                try:
+                    self.plot_fss_vs_leadtime(
+                        domain=str(domain), thresh=str(threshold), window=None,
+                        csv_dir=csv_dir, output_dir=output_dir, metric=metric,
+                    )
+                    count += 1
+                except Exception:
+                    logger.warning("Failed: metric=%s domain=%s thresh=%s",
+                                   metric, domain, threshold, exc_info=True)
+            else:
+                for window in windows:
+                    try:
+                        # Save the plot for the current combination and increment the count if successful.
+                        self.plot_fss_vs_leadtime(
+                            domain=str(domain), thresh=str(threshold), window=str(window),
+                            csv_dir=csv_dir, output_dir=output_dir, metric=metric,
+                        )
+                        count += 1
+                    except Exception:
+                        logger.warning("Failed: metric=%s domain=%s thresh=%s win=%s",
+                                       metric, domain, threshold, window, exc_info=True)
 
         # Log the total count of successfully generated plots out of the expected total combinations.
         logger.info("Generated %d / %d plots", count, total)
@@ -659,8 +810,8 @@ class Visualizer:
         # Extract the list of threshold values as floats
         thresholds = sorted(float(x) for x in sample_df["thresh"].unique())
 
-        # Extract the list of window values as integers
-        windows = sorted(int(x) for x in sample_df["window"].unique())
+        # Extract the list of window values as integers, dropping NaN from threshold-only rows
+        windows = sorted(int(x) for x in sample_df["window"].dropna().unique())
 
         # Return the discovered domain names, threshold values and window sizes as sorted lists 
         return domains, thresholds, windows

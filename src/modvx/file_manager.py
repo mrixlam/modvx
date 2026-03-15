@@ -26,8 +26,10 @@ from .utils import format_threshold_for_filename, normalize_longitude, standardi
 
 logger = logging.getLogger(__name__)
 
-# Keys for performance metrics to be saved in the FSS output files
-_METRIC_KEYS: list[str] = ["fss", "pod", "far", "csi", "fbias", "ets"]
+# Metric keys for output files and CSV extraction
+_FSS_METRIC_KEYS: list[str] = ["fss"]
+_CONTINGENCY_KEYS: list[str] = ["pod", "far", "csi", "fbias", "ets"]
+_ALL_METRIC_KEYS: list[str] = ["fss", "pod", "far", "csi", "fbias", "ets"]
 
 
 class FileManager:
@@ -738,7 +740,7 @@ class FileManager:
         window_size: int,
     ) -> None:
         """
-        Persist verification metrics for a single (cycle, region, threshold, window) combination. Each element of metrics_list is a dictionary of metric values (fss, pod, far, csi, fbias, ets) for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name, threshold percentile, and window size. All metric arrays are stored as variables inside a single NetCDF dataset so that extract_fss_to_csv can reconstruct the full record.
+        Persist FSS metrics for a single (cycle, region, threshold, window) combination. Each element of metrics_list is a dictionary containing ``fss`` for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name, threshold percentile, and window size. All metric arrays are stored as variables inside a single NetCDF dataset so that extract_fss_to_csv can reconstruct the full record.
 
         Parameters:
             metrics_list (list of Dict[str, float]): One metrics dictionary per valid time, each containing keys ``fss``, ``pod``, ``far``, ``csi``, ``fbias``, ``ets``.
@@ -777,14 +779,17 @@ class FileManager:
         # Extract and format the threshold value for inclusion in the filename
         tstr = format_threshold_for_filename(threshold)
 
-        # Construct a filename that encodes the region name, forecast step, threshold percentile, and window size for the metric results. 
-        fname = f"modvx_metrics_{region_name}_{step_h}h_indep_thresh{tstr}percent_window{window_size}.nc"
+        # Construct a filename that encodes the region name, forecast step, threshold percentile, and window size.
+        fname = (
+            f"modvx_metrics_type_neighborhood_{region_name.lower()}_"
+            f"{step_h}h_indep_thresh{tstr}percent_window{window_size}.nc"
+        )
 
         # Construct the output file path
         out = os.path.join(odir, fname)
 
-        # Define the list of metric keys to extract from the metrics dictionaries. 
-        metric_keys = ["fss", "pod", "far", "csi", "fbias", "ets"]
+        # Define the list of metric keys to extract from the metrics dictionaries.
+        metric_keys = _FSS_METRIC_KEYS
 
         # Initialize a dictionary to hold DataArrays for each metric
         data_vars = {}
@@ -804,6 +809,84 @@ class FileManager:
 
         # Log the successful write of the FSS results file for debugging purposes.
         logger.info("Saved metrics → %s", out)
+
+
+    def save_contingency_results(
+        self,
+        metrics_list: List[Dict[str, float]],
+        cycle_start: datetime.datetime,
+        region_name: str,
+        threshold: float,
+    ) -> None:
+        """
+        Persist contingency metrics for a single (cycle, region, threshold) combination. Each element of metrics_list is a dictionary containing ``pod``, ``far``, ``csi``, ``fbias``, and ``ets`` for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name and threshold percentile (no window size).
+
+        Parameters:
+            metrics_list (list of Dict[str, float]): One metrics dictionary per valid time, each containing keys ``pod``, ``far``, ``csi``, ``fbias``, ``ets``.
+            cycle_start (datetime.datetime): Initialisation time of the forecast cycle.
+            region_name (str): Verification domain name (e.g. ``"GLOBAL"``, ``"TROPICS"``).
+            threshold (float): Percentile threshold used for the computation (e.g. 90.0).
+
+        Returns:
+            None
+        """
+        # Retrieve the configuration for use in path construction and file writing.
+        config = self.config
+
+        # Format the cycle initialization time as a string for inclusion in the output directory path
+        istr = cycle_start.strftime("%Y%m%d%H")
+
+        # Calculate the forecast step in hours from the configuration's forecast_step timedelta
+        step_h = int(config.forecast_step.total_seconds() / 3600)
+
+        # Format the forecast step duration for inclusion in the output directory path (e.g. "pp24h" for a 24-hour step)
+        pp_dir = f"pp{step_h}h"
+
+        # Construct the output directory path for the verification results
+        odir = os.path.join(
+            config.resolve_relative_path(config.output_dir),
+            config.experiment_name,
+            "ExtendedFC",
+            istr,
+            pp_dir,
+        )
+
+        # Ensure the output directory exists
+        os.makedirs(odir, exist_ok=True)
+
+        # Extract and format the threshold value for inclusion in the filename
+        tstr = format_threshold_for_filename(threshold)
+
+        # Construct a filename that encodes the region name and threshold percentile for contingency results.
+        fname = (
+            f"modvx_metrics_type_contingency_{region_name.lower()}_"
+            f"{step_h}h_indep_thresh{tstr}percent.nc"
+        )
+
+        # Construct the output file path
+        out = os.path.join(odir, fname)
+
+        # Define the list of contingency metric keys to extract from the metrics dictionaries.
+        metric_keys = _CONTINGENCY_KEYS
+
+        # Initialize a dictionary to hold DataArrays for each metric
+        data_vars = {}
+
+        # Iterate over each metric key and construct a DataArray for that metric across all valid times
+        for key in metric_keys:
+            data_vars[key] = xr.DataArray(
+                [m.get(key, float("nan")) for m in metrics_list],
+                dims=["valid_time_index"],
+            )
+
+        # Create a dataset containing all metrics as separate variables
+        ds = xr.Dataset(data_vars)
+
+        # Write the dataset to a NetCDF file without compression since these files are already small
+        ds.to_netcdf(out)
+
+        # Log the successful write of the contingency results file for debugging purposes.
+        logger.info("Saved contingency metrics → %s", out)
 
 
     @staticmethod
@@ -843,37 +926,45 @@ class FileManager:
 
 
     @staticmethod
-    def _parse_metric_values(ds: xr.Dataset) -> tuple[Any, Dict[str, Any]]:
+    def _parse_metric_values(
+        ds: xr.Dataset, metric_keys: List[str],
+    ) -> tuple[int, Dict[str, Any]]:
         """
-        This helper function reads metric values from a FSS NetCDF dataset. It first checks if the dataset contains a variable named "fss". If it does, it assumes that all metrics are present as separate variables and reads them directly. If "fss" is not found, it falls back to reading the single unnamed variable (which would be the case if the file was written with a single DataArray without explicit variable names) and treats it as the FSS values, while filling all other metrics with NaN. The function returns a tuple of the FSS values array and a dictionary mapping each metric name to its corresponding array.
+        This helper function extracts metric values from an xarray Dataset based on a list of expected metric keys. It first determines the length of the records by checking the length of the first available metric variable in the dataset. Then, for each expected metric key, it attempts to extract the corresponding values from the dataset. If a key is missing, it fills in an array of NaN values with the same length as the records. The function returns both the determined length and a dictionary mapping each metric key to its extracted values or NaN arrays.
 
         Parameters:
-            ds (xarray.Dataset): Opened FSS dataset.
+            ds (xarray.Dataset): Opened NetCDF dataset.
+            metric_keys (list[str]): Metric variable names expected for this file type.
 
         Returns:
-            Tuple[Any, Dict[str, Any]]: ``(fss_vals, metric_vals)`` where fss_vals is a 1-D array of FSS values and metric_vals maps metric names to arrays.
+            Tuple[int, Dict[str, Any]]: ``(length, metric_vals)`` where length is the number of entries and metric_vals maps metric names to arrays.
         """
-        if "fss" in ds:
-            # Extract the values of the "fss" variable directly from the dataset
-            fss_values = ds["fss"].values
+        # Initialize the length of the records to zero
+        length = 0
 
-            # Generate a dictionary of metric values by reading each expected metric variable from the dataset
-            metric_values: Dict[str, Any] = {
-                k: ds[k].values if k in ds else [float("nan")] * len(fss_values)
-                for k in _METRIC_KEYS
-            }
-        else:
-            # Extract the values of the single unnamed variable, which we assume contains FSS values. 
-            fss_values = ds["__xarray_dataarray_variable__"].values
+        # Determine the length of the records by checking the first available metric variable in the dataset. 
+        if metric_keys and metric_keys[0] in ds:
+            length = len(ds[metric_keys[0]])
+        elif "fss" in metric_keys and "__xarray_dataarray_variable__" in ds:
+            length = len(ds["__xarray_dataarray_variable__"])
+        elif ds.data_vars:
+            first_key = list(ds.data_vars)[0]
+            length = len(ds[first_key])
 
-            # Generate a dictionary of metric values where FSS is populated from the dataset and all other metrics are filled with NaN 
-            metric_values = {
-                "fss": fss_values,
-                **{k: [float("nan")] * len(fss_values) for k in _METRIC_KEYS if k != "fss"},
-            }
+        # Initialize a dictionary to hold the metric values, filling in NaN for any missing keys
+        metric_values: Dict[str, Any] = {}
 
-        # Return the extracted FSS values and the dictionary of metric values
-        return fss_values, metric_values
+        # Iterate over the expected metric keys and extract values from the dataset, or fill with NaN if the key is missing
+        for key in metric_keys:
+            if key in ds:
+                metric_values[key] = ds[key].values
+            elif key == "fss" and "__xarray_dataarray_variable__" in ds:
+                metric_values[key] = ds["__xarray_dataarray_variable__"].values
+            else:
+                metric_values[key] = [float("nan")] * length
+
+        # Return the determined length of the records and the dictionary of metric values
+        return length, metric_values
 
 
     def _parse_records_from_nc_file(self, nc_file: str) -> Optional[tuple[str, List[Dict]]]:
@@ -886,7 +977,11 @@ class FileManager:
         Returns:
             Optional[Tuple[str, List[Dict]]]: Tuple of ``(experiment, records)`` on success, or ``None`` when parsing fails.
         """
-        from .utils import extract_lead_time_hours_from_path, parse_fss_filename_metadata
+        from .utils import (
+            extract_lead_time_hours_from_path,
+            parse_fss_filename_metadata,
+            parse_contingency_filename_metadata,
+        )
 
         # Extract the experiment name and init_time from the file path using the provided helper function
         context = self._extract_file_context(nc_file)
@@ -905,8 +1000,16 @@ class FileManager:
         if lead_time is None:
             return None
 
-        # Parse the filename to extract metadata such as domain, threshold, and window size using the provided helper function. 
+        # Parse the filename to extract metadata such as domain, threshold, and window size.
         meta = parse_fss_filename_metadata(os.path.basename(nc_file))
+
+        # Determine if this file is a contingency metrics file based on the presence of metadata patterns in the filename. 
+        is_contingency = False
+
+        # If the filename does not match the expected patterns for FSS metrics, attempt to parse it as a contingency metrics file.
+        if meta is None:
+            meta = parse_contingency_filename_metadata(os.path.basename(nc_file))
+            is_contingency = meta is not None
 
         # Return None if the filename does not contain the expected metadata patterns
         if meta is None:
@@ -915,23 +1018,43 @@ class FileManager:
         # Open the NetCDF file using xarray 
         ds = xr.open_dataset(nc_file)
 
-        # Extract metric values from the dataset
-        fss_values, metric_values = self._parse_metric_values(ds)
+        # Extract metric values from the dataset based on file type
+        if is_contingency:
+            metric_keys = _CONTINGENCY_KEYS
+        elif any(key in ds for key in _CONTINGENCY_KEYS):
+            metric_keys = _ALL_METRIC_KEYS
+        else:
+            metric_keys = _FSS_METRIC_KEYS
+
+        # Extract the length of the records and a dictionary of metric values from the dataset  
+        length, metric_values = self._parse_metric_values(ds, metric_keys)
+
+        # Build a full metric dictionary with NaN for missing keys
+        metric_values_all: Dict[str, Any] = {
+            k: metric_values.get(k, [float("nan")] * length)
+            for k in _ALL_METRIC_KEYS
+        }
 
         # Close the dataset to free resources 
         ds.close()
 
-        # Generate a list of records, one per valid time index, containing all relevant metadata and metric values for that index. 
+        # Extract the threshold value from metadata and convert it to a float for consistent typing in the records
+        threshold_value = float(meta["thresh"])
+
+        # Extract the window size from metadata if this is an FSS metrics file, otherwise set it to None
+        window_value = None if is_contingency else int(meta["window"])
+
+        # Construct a list of metric record dictionaries, one per valid time index, containing all relevant information for each record. 
         records = [
             {
                 "initTime": init_time,
                 "leadTime": lead_time * (index + 1),
                 "domain": meta["domain"],
-                "thresh": meta["thresh"],
-                "window": meta["window"],
-                **{k: metric_values[k][index] for k in _METRIC_KEYS},
+                "thresh": threshold_value,
+                "window": window_value,
+                **{k: metric_values_all[k][index] for k in _ALL_METRIC_KEYS},
             }
-            for index in range(len(fss_values))
+            for index in range(length)
         ]
 
         # Return the extracted experiment name and the list of metric records 
@@ -975,7 +1098,7 @@ class FileManager:
         csv_dir: Optional[str] = None,
     ) -> None:
         """
-        Scan the output directory tree for FSS NetCDF files and write one CSV per experiment. All NetCDF files matching the ``**/ExtendedFC/**/*.nc`` glob pattern are discovered, and their filenames are parsed by parse_filename_metadata to extract domain, threshold, and window metadata. Lead times are extracted from the directory path via extract_lead_time_hours. Results are aggregated into a pandas DataFrame per experiment and written to ``<csv_dir>/<experiment>.csv``.
+        Scan the output directory tree for metrics NetCDF files and write one CSV per experiment. All NetCDF files matching the ``**/ExtendedFC/**/*.nc`` glob pattern are discovered, and their filenames are parsed to extract domain, threshold, and window metadata. Lead times are extracted from the directory path via extract_lead_time_hours. Results are aggregated into a pandas DataFrame per experiment and written to ``<csv_dir>/<experiment>.csv``.
 
         Parameters:
             output_dir (str, optional): Root output directory to scan; defaults to the configured output_dir.
@@ -1003,8 +1126,8 @@ class FileManager:
             os.path.join(output_dir, "**/ExtendedFC/**/*.nc"), recursive=True
         )
 
-        # Log the number of FSS NetCDF files found for processing
-        logger.info("Found %d FSS NetCDF files", len(nc_files))
+        # Log the number of metrics NetCDF files found for processing
+        logger.info("Found %d metrics NetCDF files", len(nc_files))
 
         # Initialize a dictionary to hold lists of metric records for each experiment
         data: Dict[str, list] = defaultdict(list)
