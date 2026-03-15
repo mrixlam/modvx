@@ -29,7 +29,7 @@ from modvx.visualizer import (
     _ALL_METRICS,
     _BOUNDED_METRICS,
     _METRIC_LABELS,
-    _WINDOW_INDEPENDENT_METRICS,
+    _WINDOW_INDEPENDENT_METRICS, #noqa: F401
 )
 
 import matplotlib
