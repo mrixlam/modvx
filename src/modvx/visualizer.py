@@ -230,7 +230,7 @@ class Visualizer:
 
     def _leadtime_tick_interval(self) -> int:
         """
-        Determine the x-axis tick interval for lead-time plots based on the configured forecast length.
+        This helper determines a sensible lead-time tick interval in hours based on the forecast length configured in the associated :class:`ModvxConfig`. Shorter forecast lengths get more frequent ticks (for example, 1-hour intervals for up to 12 hours) while longer forecast lengths get less frequent ticks (for example, 6 or 12-hour intervals for up to 48 hours or more). This dynamic tick interval helps maintain readability across different forecast lengths.
 
         Returns:
             int: Lead-time tick interval in hours.
@@ -256,7 +256,7 @@ class Visualizer:
 
     def _apply_leadtime_ticks(self, ax: "Any", lead_times: list[float]) -> None:
         """
-        Apply lead-time ticks to the x-axis using the configured interval.
+        This helper applies x-ticks to the provided axis object based on the available lead-time values. It determines a sensible tick interval using the helper method :meth:`_leadtime_tick_interval`, calculates tick positions from the minimum to maximum lead time with the determined interval, and sets the x-ticks on the axis. If no lead times are provided, the function returns without modifying the axis.
 
         Parameters:
             ax (Any): Matplotlib Axes-like object on which to set x-ticks.

@@ -26,10 +26,7 @@ _HAS_MPASDIAG: Optional[bool] = None
 
 def _variables_to_drop(filepath: str, keep: tuple[str, ...]) -> list[str]:
     """
-    Open a NetCDF file and return the list of variable names present in the file
-    that are not included in the provided *keep* tuple. Useful for building the
-    `drop_variables` argument to xarray loading routines so only necessary
-    variables are read into memory.
+    This helper function identifies which variables in a NetCDF file should be dropped when loading with xarray, based on a specified tuple of variable names to keep. It opens the file in a lightweight manner to probe the available variables and returns a list of those that are not in the keep tuple. This allows for efficient loading of only the necessary variables while avoiding memory overhead from unwanted data.
 
     Parameters:
         filepath (str): Path to the NetCDF file to probe.
@@ -45,11 +42,7 @@ def _variables_to_drop(filepath: str, keep: tuple[str, ...]) -> list[str]:
 
 def _ensure_mpasdiag_available() -> None:
     """
-    Lazily import required mpasdiag modules on first use and raise a descriptive
-    error if unavailable. The import cache is stored in the module-level
-    ``_HAS_MPASDIAG`` flag so subsequent calls are inexpensive. Raises an
-    informative ImportError with installation instructions when mpasdiag is
-    not present.
+    This function checks for the availability of the mpasdiag package, which is required for remapping MPAS data to a regular lat-lon grid. It uses a module-level cache variable to avoid repeated import attempts after the first check. If mpasdiag is not available, it raises an ImportError with instructions for installation.
 
     Returns:
         None

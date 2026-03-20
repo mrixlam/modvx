@@ -79,8 +79,7 @@ def _initialize_multiprocessing_worker(execute_fn: Callable[[Dict[str, Any]], No
 
 def _multiprocessing_worker_execute_units(units: List[Dict[str, Any]]) -> int:
     """
-    Execute a list of work-units sequentially within a single multiprocessing worker process. The execution function must have been stored in the module-level ``_MP_EXECUTE_FN`` variable by a prior call to the pool initializer; an assertion
-    error is raised if this precondition is not met. Grouping multiple units into a single worker call allows the FileManager's in-memory cache to be reused across units in the same (cycle, region) group, reducing redundant I/O.
+    Execute a list of work-units sequentially within a single multiprocessing worker process. The execution function must have been stored in the module-level ``_MP_EXECUTE_FN`` variable by a prior call to the pool initializer; an assertion error is raised if this precondition is not met. Grouping multiple units into a single worker call allows the FileManager's in-memory cache to be reused across units in the same (cycle, region) group, reducing redundant I/O.
 
     Parameters:
         units (list of dict): Ordered list of work-unit dictionaries to execute sequentially.
@@ -187,9 +186,7 @@ class ParallelProcessor:
     @staticmethod
     def _unit_cycle_key(unit: Dict[str, Any]) -> str:
         """
-        Generate a string key that identifies work-units sharing the same forecast cycle.
-        Units with the same cycle start time access identical forecast files and can reuse
-        cached data, so grouping by the cycle enables assigning them to the same worker.
+        This helper function generates a string key for grouping work-units by their forecast cycle. It extracts the ``cycle_start`` datetime from the unit dictionary and formats it as a string in the format ``"<YYYYmmddHH>"``, which represents the year, month, day, and hour of the cycle start time. This key is used to group units that belong to the same forecast cycle together, enabling efficient caching and data reuse within each cycle group.
 
         Parameters:
             unit (dict): Work-unit dictionary containing at least ``cycle_start``.
@@ -204,9 +201,7 @@ class ParallelProcessor:
     @staticmethod
     def _group_units_by_cycle(units: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Organise a flat list of work-units into groups keyed by forecast cycle. Grouping
-        units by cycle enables each worker to reuse cached forecast data across regions
-        within the same cycle, reducing redundant I/O.
+        This helper function groups a list of work-unit dictionaries by their forecast cycle, as determined by the ``cycle_start`` field. It iterates through the provided list of units, generates a cycle key for each unit using the _unit_cycle_key function, and accumulates units into a dictionary where the keys are the cycle strings and the values are lists of units that belong to that cycle. This grouping allows for efficient assignment of related units to the same worker, maximizing cache reuse when processing units from the same cycle.
 
         Parameters:
             units (list of dict): Flat list of all work-unit dictionaries.

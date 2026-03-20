@@ -70,6 +70,9 @@ class ModvxConfig:
     # Set the default forecast length in hours (e.g., 48 for 48-hour forecasts)
     forecast_length_hours: int = 48
 
+    # Set the precipitation accumulation period in hours (0 = use forecast_step_hours)
+    precip_accum_hours: int = 0
+
     # Set the default path to the MPAS grid file (relative to base_dir)
     mpas_grid_file: str = ""  
 
@@ -136,6 +139,18 @@ class ModvxConfig:
     def forecast_step(self) -> datetime.timedelta:
         # Return the forecast step interval as a datetime.timedelta 
         return datetime.timedelta(hours=self.forecast_step_hours)
+
+
+    @property
+    def effective_precip_accum_hours(self) -> int:
+        # Return precip_accum_hours if set, otherwise fall back to forecast_step_hours
+        return self.precip_accum_hours if self.precip_accum_hours > 0 else self.forecast_step_hours
+
+
+    @property
+    def precip_accum(self) -> datetime.timedelta:
+        # Return the effective precipitation accumulation period as a timedelta
+        return datetime.timedelta(hours=self.effective_precip_accum_hours)
 
 
     @property

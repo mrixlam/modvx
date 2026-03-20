@@ -34,7 +34,7 @@ def dv() -> DataValidator:
 
 
 class TestPrepareObsCoords:
-    """Tests for the standardize_observation_coordinates static method covering coordinate renaming and longitude normalization."""
+    """ Tests for prepare_observation_coordinates verifying that coordinate renaming and longitude wrapping are performed correctly. """
 
     def test_renames_lat_lon(self) -> None:
         """
@@ -69,7 +69,7 @@ class TestPrepareObsCoords:
 
 
 class TestMaskExtent:
-    """Tests for compute_mask_extent verifying bounding-box extraction from binary mask DataArrays."""
+    """ Tests for compute_mask_extent verifying correct bounding box extraction from a binary mask and error handling for empty masks. """
 
     def test_valid_extent(self) -> None:
         """
@@ -106,7 +106,7 @@ class TestMaskExtent:
 
 
 class TestClipObservations:
-    """Tests for the clip_observation_to_buffer method verifying spatial subsetting and buffer expansion behavior."""
+    """ Tests for clip_observations verifying that the output spatial extent includes the specified buffer padding beyond the mask-derived bounding box. """
 
     def test_clip_with_buffer(self, dv: DataValidator) -> None:
         """
@@ -133,7 +133,7 @@ class TestClipObservations:
 
 
 class TestRegrid:
-    """Tests for regrid_to_common_grid covering interpolation to observation grids and fixed-resolution common grids."""
+    """ Tests for regrid_to_common_grid verifying that forecast and observation arrays are resampled to matching shapes based on the specified target resolution. """
 
     def test_obs_target(self) -> None:
         """
@@ -177,7 +177,7 @@ class TestRegrid:
 
 
 class TestApplyMask:
-    """Tests for apply_domain_mask verifying NaN assignment outside active mask cells and value preservation inside."""
+    """ Tests for apply_verification_mask verifying that values outside the mask are set to NaN while values inside the mask are retained. """
 
     def test_nan_outside_mask(self) -> None:
         """
@@ -207,13 +207,8 @@ class TestApplyMask:
         assert fm.values[1, 1] == 1.0
 
 
-# -----------------------------------------------------------------------
-# DataValidator gap-closing tests
-# -----------------------------------------------------------------------
-
-
 class TestRegridToTargetFcst:
-    """Cover regrid_to_target with target_resolution='fcst'."""
+    """ Tests for regrid_to_common_grid with target_resolution='fcst' verifying that the forecast grid shape is preserved after regridding to the observation grid. """
 
     def _make_grid(
         self,
@@ -269,7 +264,7 @@ class TestRegridToTargetFcst:
 
 
 class TestApplyVerificationMaskNumeric:
-    """Cover apply_verification_mask with numeric resolution."""
+    """ Tests for apply_verification_mask with numeric target_resolution verifying NaN masking behavior. """
 
     def test_apply_verification_mask_numeric(self) -> None:
         """
@@ -299,7 +294,7 @@ class TestApplyVerificationMaskNumeric:
 
 
 class TestPreparePipeline:
-    """Cover prepare() full pipeline."""
+    """ Integration test for the full prepare() pipeline from raw forecast and observation arrays through to masked, regridded output. """
 
     def test_prepare_full_pipeline(self) -> None:
         """

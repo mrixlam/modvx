@@ -23,10 +23,6 @@ import xarray as xr
 
 from modvx.mpas_reader import load_mpas_precip
 
-# ---------------------------------------------------------------------------
-# Paths to the test data (tests/testdata)
-# ---------------------------------------------------------------------------
-
 _TEST_DIR = Path(__file__).resolve().parent / "testdata"
 _GRID_FILE = _TEST_DIR / "grid" / "x1.163842.grid.nc"
 _FC_DIR = _TEST_DIR / "data" / "fcst" / "mrislam_coldstart_60km2024" / "ExtendedFC"
@@ -48,23 +44,15 @@ def _is_real_netcdf(path: Path) -> bool:
     except OSError:
         return False
 
-
-# Skip everything in this module if the test data tree is absent or if the
-# files are Git-LFS pointers (e.g. CI running without LFS budget).
+# Skip all tests in this module if the grid file is missing or is a Git-LFS pointer
 pytestmark = pytest.mark.skipif(
     not _is_real_netcdf(_GRID_FILE),
     reason="test data not present or is a Git-LFS pointer (tests/testdata/)",
 )
 
 
-# =====================================================================
-# Unit tests — synthetic data (always run if real data is present for
-# the skip-mark to pass; the tests themselves don't need real files)
-# =====================================================================
-
-
 class TestLoadMpasPrecipSynthetic:
-    """Unit tests for load_mpas_precip using minimal synthetic NetCDF file pairs that avoid any dependency on real MPAS forecast data. Each test constructs in-memory or tmp_path-based datasets with known values to verify specific loader behaviors in isolation."""
+    """ Unit tests for load_mpas_precip using minimal synthetic NetCDF file pairs that avoid any dependency on real MPAS forecast data. Each test constructs in-memory or tmp_path-based datasets with known values to verify specific loader behaviors in isolation. """
 
     @pytest.fixture()
     def _synth_files(self, tmp_path: Path):
@@ -175,17 +163,12 @@ class TestLoadMpasPrecipSynthetic:
             load_mpas_precip(str(diag_path), str(grid_path))
 
 
-# =====================================================================
-# Input file consistency checks — real mri_test data
-# =====================================================================
-
-
 class TestGridFileConsistency:
-    """Structural validation tests for the real MPAS grid NetCDF file confirming coordinate variables, mesh dimensions, and topology arrays are present and within expected physical ranges."""
+    """ Structural validation tests for the real MPAS grid NetCDF file confirming coordinate variables, mesh dimensions, and topology arrays are present and within expected physical ranges. """
 
     @pytest.fixture(scope="class")
     def grid(self):
-        """Open the real MPAS grid NetCDF file and yield the dataset for class-scoped reuse across all grid consistency tests. The dataset is opened once per test class to avoid redundant file I/O and is closed automatically after all tests in the class have completed."""
+        """ Open the real MPAS grid NetCDF file and yield the dataset for class-scoped reuse across all grid consistency tests. The dataset is opened once per test class to avoid redundant file I/O and is closed automatically after all tests in the class have completed. """
         ds = xr.open_dataset(_GRID_FILE)
         yield ds
         ds.close()
@@ -228,11 +211,11 @@ class TestGridFileConsistency:
 
 
 class TestDiagFilesExist:
-    """File-presence tests that confirm all expected MPAS diagnostic NetCDF files exist on disk for every forecast cycle in the test dataset."""
+    """ File-presence tests that confirm all expected MPAS diagnostic NetCDF files exist on disk for every forecast cycle in the test dataset. """
 
     @pytest.mark.parametrize("cycle", _CYCLES)
     def test_init_hour_diag_exists(self, cycle: str) -> None:
-        """Confirm that the hour-0 MPAS diagnostic file exists for each forecast cycle in the test dataset. The initialization-hour file is required to compute precipitation accumulations by providing the baseline cumulative value that is subtracted from later hours. Missing hour-0 files would either raise a FileNotFoundError in the pipeline or produce incorrect accumulations using a stale prior-run baseline."""
+        """ Confirm that the hour-0 MPAS diagnostic file exists for each forecast cycle in the test dataset. The initialization-hour file is required to compute precipitation accumulations by providing the baseline cumulative value that is subtracted from later hours. Missing hour-0 files would either raise a FileNotFoundError in the pipeline or produce incorrect accumulations using a stale prior-run baseline. """
         init_dt = datetime.datetime.strptime(cycle, "%Y%m%d%H")
         ts = init_dt.strftime("%Y-%m-%d_%H.%M.%S")
         path = _FC_DIR / cycle / f"diag.{ts}.nc"
@@ -256,11 +239,11 @@ class TestDiagFilesExist:
 
 
 class TestDiagFileContents:
-    """Content validation tests checking variable presence, array shape, data type, and physical plausibility within a representative MPAS diagnostic file."""
+    """ Content validation tests checking variable presence, array shape, data type, and physical plausibility within a representative MPAS diagnostic file. """
 
     @pytest.fixture(scope="class")
     def sample_diag(self):
-        """Open the hour-6 MPAS diagnostic file from the 2024091700 forecast cycle for class-scoped reuse across all content validation tests. This mid-forecast file is chosen because it is expected to contain non-zero cumulative precipitation, making it more representative than the initialization-hour file. The dataset is opened once per test class to minimize I/O overhead and is closed automatically after all tests finish."""
+        """ Open the hour-6 MPAS diagnostic file from the 2024091700 forecast cycle for class-scoped reuse across all content validation tests. This mid-forecast file is chosen because it is expected to contain non-zero cumulative precipitation, making it more representative than the initialization-hour file. The dataset is opened once per test class to minimize I/O overhead and is closed automatically after all tests finish. """
         path = _FC_DIR / "2024091700" / "diag.2024-09-17_06.00.00.nc"
         ds = xr.open_dataset(path)
         yield ds
@@ -299,11 +282,11 @@ class TestDiagFileContents:
 
 
 class TestHourZeroPrecip:
-    """Parametrized sanity checks confirming that every forecast cycle's initialization-hour diag file contains zero cumulative precipitation for both rainc and rainnc."""
+    """ Parametrized sanity checks confirming that every forecast cycle's initialization-hour diag file contains zero cumulative precipitation for both rainc and rainnc. """
 
     @pytest.mark.parametrize("cycle", _CYCLES)
     def test_precip_zero_at_init(self, cycle: str) -> None:
-        """Verify that cumulative precipitation is zero at the model initialization hour for every forecast cycle in the test dataset. MPAS resets cumulative precipitation counters at the start of each cold-start forecast run, so any non-zero value at hour 0 indicates an initialization failure or a misidentified warm-start file. Failing this test would invalidate all accumulation calculations that use the hour-0 file as the baseline subtraction reference."""
+        """ Verify that cumulative precipitation is zero at the model initialization hour for every forecast cycle in the test dataset. MPAS resets cumulative precipitation counters at the start of each cold-start forecast run, so any non-zero value at hour 0 indicates an initialization failure or a misidentified warm-start file. Failing this test would invalidate all accumulation calculations that use the hour-0 file as the baseline subtraction reference. """
         init_dt = datetime.datetime.strptime(cycle, "%Y%m%d%H")
         ts = init_dt.strftime("%Y-%m-%d_%H.%M.%S")
         path = _FC_DIR / cycle / f"diag.{ts}.nc"
@@ -319,10 +302,10 @@ class TestHourZeroPrecip:
 
 
 class TestPrecipMonotonicity:
-    """Integration tests verifying that domain-total cumulative precipitation increases or stays constant as the forecast advances, consistent with MPAS's running-accumulation output convention."""
+    """ Integration tests verifying that domain-total cumulative precipitation increases or stays constant as the forecast advances, consistent with MPAS's running-accumulation output convention. """
 
     def test_total_precip_increases(self) -> None:
-        """Verify that domain-total cumulative precipitation at hour 3 is greater than or equal to hour 0, and at the final forecast hour is greater than or equal to hour 3. Because MPAS writes running totals rather than interval accumulations, summed precipitation can only stay constant or increase across consecutive time steps. Violating this monotonicity property would indicate a model reset, a file ordering error, or numerical corruption in the diagnostic output."""
+        """ Verify that domain-total cumulative precipitation at hour 3 is greater than or equal to hour 0, and at the final forecast hour is greater than or equal to hour 3. Because MPAS writes running totals rather than interval accumulations, summed precipitation can only stay constant or increase across consecutive time steps. Violating this monotonicity property would indicate a model reset, a file ordering error, or numerical corruption in the diagnostic output. """
         cycle = "2024091700"
         init_dt = datetime.datetime(2024, 9, 17, 0)
         grid_file = str(_GRID_FILE)
@@ -344,10 +327,10 @@ class TestPrecipMonotonicity:
 
 
 class TestAccumulationConsistency:
-    """Integration tests that validate the physical plausibility of precipitation accumulations computed by differencing MPAS diagnostic files across a 6-hour window."""
+    """ Integration tests that validate the physical plausibility of precipitation accumulations computed by differencing MPAS diagnostic files across a 6-hour window. """
 
     def test_6h_accumulation_non_negative(self) -> None:
-        """Verify that the 6-hour precipitation accumulation derived by subtracting the hour-0 diag file from the hour-6 diag file is non-negative at every mesh cell. Negative accumulations would indicate that cumulative totals decreased over time, which is physically impossible and would produce incorrect binary masks in the FSS verification pipeline. A small tolerance of 1e-4 mm is allowed to absorb floating-point subtraction rounding without triggering false positives."""
+        """ Verify that the 6-hour precipitation accumulation derived by subtracting the hour-0 diag file from the hour-6 diag file is non-negative at every mesh cell. Negative accumulations would indicate that cumulative totals decreased over time, which is physically impossible and would produce incorrect binary masks in the FSS verification pipeline. A small tolerance of 1e-4 mm is allowed to absorb floating-point subtraction rounding without triggering false positives. """
         cycle = "2024091700"
         grid_file = str(_GRID_FILE)
         init_dt = datetime.datetime(2024, 9, 17, 0)
@@ -368,7 +351,7 @@ class TestAccumulationConsistency:
         )
 
     def test_6h_accumulation_reasonable_magnitude(self) -> None:
-        """Confirm that the maximum 6-hour accumulated precipitation does not exceed a physically plausible upper bound of 500 mm anywhere in the domain. Exceeding this threshold would suggest a data overflow, incorrect unit conversion, or a runaway numerical issue in the model output that would render FSS computations meaningless. This sanity bound is intentionally generous to avoid false positives from extreme convective events while still catching clearly erroneous values."""
+        """ Confirm that the maximum 6-hour accumulated precipitation does not exceed a physically plausible upper bound of 500 mm anywhere in the domain. Exceeding this threshold would suggest a data overflow, incorrect unit conversion, or a runaway numerical issue in the model output that would render FSS computations meaningless. This sanity bound is intentionally generous to avoid false positives from extreme convective events while still catching clearly erroneous values. """
         cycle = "2024091700"
         grid_file = str(_GRID_FILE)
         init_dt = datetime.datetime(2024, 9, 17, 0)
@@ -389,13 +372,8 @@ class TestAccumulationConsistency:
         )
 
 
-# -----------------------------------------------------------------------
-# _ensure_mpasdiag branches
-# -----------------------------------------------------------------------
-
-
 class TestEnsureMpasdiagBranches:
-    """Cover _ensure_mpasdiag import-error, cached-true, and success paths."""
+    """ Cover _ensure_mpasdiag import-error, cached-true, and success paths. """
 
     def test_ensure_mpasdiag_import_error(self) -> None:
         """
@@ -492,13 +470,8 @@ class TestEnsureMpasdiagBranches:
             mr._HAS_MPASDIAG = None
 
 
-# -----------------------------------------------------------------------
-# remap_to_latlon
-# -----------------------------------------------------------------------
-
-
 class TestRemapToLatlonWithGrid:
-    """Cover remap_to_latlon body — with lonCell present and with grid fallback."""
+    """ Cover remap_to_latlon body — with lonCell present and with grid fallback. """
 
     def test_remap_with_grid_fallback(self, tmp_path: Path) -> None:
         """
@@ -636,13 +609,8 @@ class TestRemapToLatlonWithGrid:
         assert "longitude" in result.dims
 
 
-# -----------------------------------------------------------------------
-# load_and_remap_mpas_precip
-# -----------------------------------------------------------------------
-
-
 class TestLoadAndRemapMpasPrecip:
-    """Cover load_and_remap_mpas_precip convenience wrapper."""
+    """ Cover load_and_remap_mpas_precip convenience wrapper. """
 
     def test_load_and_remap(self, tmp_path: Path) -> None:
         """

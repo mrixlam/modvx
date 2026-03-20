@@ -32,7 +32,7 @@ import xarray as xr
 
 
 class TestParseDatetime:
-    """Tests for parse_datetime verifying successful parsing of multiple supported timestamp formats and correct rejection of invalid input strings."""
+    """ Tests for parse_datetime_string verifying correct parsing of both compact canonical and ISO 8601 datetime formats, as well as error handling for invalid strings. These tests ensure that the function can robustly handle the primary timestamp formats used in modvx configuration files and metadata, preventing silent misconfigurations due to parsing errors and ensuring compatibility with a range of datetime string inputs that may appear in different contexts within the pipeline. """
 
     def test_canonical(self) -> None:
         """
@@ -55,7 +55,7 @@ class TestParseDatetime:
 
 
 class TestFormatThreshold:
-    """Tests for format_threshold_for_filename verifying correct conversion of float threshold values to the 'NNpD' filename-safe string representation."""
+    """ Tests for format_threshold_for_filename verifying correct conversion of float threshold values to filename-safe strings. These tests ensure that both integer-like and decimal thresholds are formatted consistently, preventing file naming collisions and ensuring compatibility with downstream loading code. The 'p' separator is used to replace the decimal point to avoid filesystem issues, and the formatting must be precise to ensure that the original float value can be reconstructed from the filename when reading saved results. """
 
     def test_integer_like(self) -> None:
         """
@@ -71,7 +71,7 @@ class TestFormatThreshold:
 
 
 class TestGenerators:
-    """Tests for generate_valid_times and generate_forecast_cycles verifying sequence length, endpoint inclusion, and correct step-based iteration."""
+    """ Tests for generate_valid_times and generate_forecast_cycles verifying sequence length, endpoint inclusion, and correct step-based iteration. These tests ensure that the generators produce the expected number of timestamps or cycles, correctly handle inclusive and exclusive endpoints, and iterate with the specified step size, preventing off-by-one errors and ensuring accurate coverage of the forecast period. """
 
     def test_valid_times(self) -> None:
         """
@@ -97,7 +97,7 @@ class TestGenerators:
 
 
 class TestNormalizeLongitude:
-    """Tests for normalize_longitude verifying correct remapping of coordinate values between the [0, 360) and [-180, 180) longitude conventions."""
+    """ Tests for normalize_longitude verifying correct remapping of longitude coordinates to the specified target convention. These tests ensure that negative longitudes are correctly converted to the [0, 360) range when requested, and that longitudes above 180 degrees are remapped to the [-180, 180) range when that convention is requested. Proper normalization is critical for spatial operations that require consistent longitude conventions across datasets, such as regridding or mask application, and these tests confirm that the function handles both common remapping scenarios correctly without altering non-target coordinates. """
 
     def test_negative_to_0_360(self) -> None:
         """
@@ -127,7 +127,7 @@ class TestNormalizeLongitude:
 
 
 class TestStandardizeCoords:
-    """Tests for standardize_coords verifying dimension renaming from short-form to canonical long-form coordinate names and no-op behavior when names are already correct."""
+    """ Tests for standardize_coords verifying dimension renaming from short-form to canonical long-form coordinate names and no-op behavior when names are already correct. These tests ensure that all downstream pipeline components can rely on consistent dimension names, preventing errors in indexing, alignment, and aggregation operations. """
 
     def test_rename_lat_lon(self) -> None:
         """
@@ -148,7 +148,7 @@ class TestStandardizeCoords:
 
 
 class TestParseFilenameMetadata:
-    """Tests for parse_filename_metadata verifying regex-based extraction of domain, threshold, and window tokens from FSS output filenames."""
+    """ Tests for parse_filename_metadata verifying regex-based extraction of domain, threshold, and window tokens from FSS output filenames. These tests ensure that the function can correctly interpret the structured naming convention used for FSS output files, allowing downstream code to reliably extract metadata for plotting, filtering, and analysis. """
 
     def test_standard(self) -> None:
         """
@@ -177,7 +177,7 @@ class TestParseFilenameMetadata:
 
 
 class TestExtractLeadTime:
-    """Tests for extract_lead_time_hours verifying integer lead-time extraction from pipeline output path strings and graceful None return for non-matching paths."""
+    """ Tests for extract_lead_time_hours_from_path verifying correct regex extraction of lead time hours from output paths containing 'ppNh' directory components. These tests ensure that the function can reliably parse lead time information embedded in directory names, which is critical for annotating FSS results by forecast hour and organizing output files without requiring metadata to be stored in the files themselves. The function must return an integer representing the lead time in hours when the expected pattern is present, and return None when no such pattern exists, allowing downstream code to handle both cases appropriately. """
 
     def test_pp12h(self) -> None:
         """
@@ -192,13 +192,8 @@ class TestExtractLeadTime:
         assert extract_lead_time_hours_from_path("output/exp/foo.nc") is None
 
 
-# -----------------------------------------------------------------------
-# Utils gap-closing tests
-# -----------------------------------------------------------------------
-
-
 class TestNormalizeLongitudeBadTarget:
-    """Cover normalize_longitude error path for unknown target."""
+    """ Tests for normalize_longitude verifying that a ValueError is raised when an unrecognised target string is given. The function supports '0to360' and '-180to180' longitude conventions; any other value should immediately raise a ValueError with a message containing 'Unknown longitude target'. This test protects callers from silent wrong-convention remapping when a typo or unknown convention name is passed. """
 
     def test_normalize_longitude_bad_target(self) -> None:
         """
@@ -217,7 +212,7 @@ class TestNormalizeLongitudeBadTarget:
 
 
 class TestParseFilenameMissingParts:
-    """Cover parse_filename_metadata edge cases for missing patterns."""
+    """ Tests for parse_filename_metadata verifying behavior when required patterns are missing from filenames. These tests ensure that the function gracefully returns None when either the threshold or window size component is absent, allowing callers to skip unrecognised files without raising exceptions. """
 
     def test_parse_filename_missing_thresh(self) -> None:
         """

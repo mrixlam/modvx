@@ -30,12 +30,8 @@ from modvx.cli import (
 from modvx.config import ModvxConfig
 
 
-# -----------------------------------------------------------------------
-# configure_root_logging
-# -----------------------------------------------------------------------
-
 class TestSetupLogging:
-    """Tests for the configure_root_logging helper that configures root logging."""
+    """ Tests for configure_root_logging verifying correct log level configuration based on the verbose flag in the config. The root logger's effective level is checked after calling configure_root_logging with different verbose settings to confirm that INFO is the default and DEBUG is enabled when verbose is True. Proper logging configuration is essential for users to see appropriate levels of output during normal runs and debugging sessions."""
 
     def test_info_level_by_default(self) -> None:
         """
@@ -62,12 +58,8 @@ class TestSetupLogging:
         assert logging.getLogger().level == logging.DEBUG
 
 
-# -----------------------------------------------------------------------
-# _add_common_args
-# -----------------------------------------------------------------------
-
 class TestAddCommonArgs:
-    """Tests for _add_common_args verifying common arguments are registered."""
+    """ Tests for add_shared_cli_args confirming that the common --config and --verbose flags are registered on an ArgumentParser and that their defaults are None. The test parses synthetic argument lists to confirm that the flags are recognized and that the resulting namespace contains the expected values. Consistent registration of these common arguments across all subcommand parsers is critical to ensure users can always specify a config file and verbosity level regardless of which subcommand they invoke. """
 
     def test_config_and_verbose_registered(self) -> None:
         """
@@ -96,12 +88,8 @@ class TestAddCommonArgs:
         assert args.verbose is None
 
 
-# -----------------------------------------------------------------------
-# _resolve_config
-# -----------------------------------------------------------------------
-
 class TestResolveConfig:
-    """Tests for _resolve_config from parsed argparse namespace."""
+    """ Tests for resolve_config_from_namespace verifying correct config resolution logic based on the presence or absence of a --config path and CLI overrides. The tests cover three scenarios: no YAML file provided (should return default config), CLI overrides applied to the config, and loading from a YAML file. The returned object is always asserted to be an instance of ModvxConfig, and specific fields are checked for override correctness. Proper config resolution is essential for the CLI to function as intended, allowing users to rely on defaults, YAML files, or direct CLI flags as needed. """
 
     def test_default_config_when_no_yaml(self) -> None:
         """
@@ -163,12 +151,8 @@ class TestResolveConfig:
         assert cfg.forecast_step_hours == 3
 
 
-# -----------------------------------------------------------------------
-# main() entry point
-# -----------------------------------------------------------------------
-
 class TestMain:
-    """Tests for the main() CLI entry point and subcommand dispatch."""
+    """ Tests for the main() function and subcommand dispatch logic. The tests cover scenarios such as invoking main with no arguments (should exit with error), correct dispatch of 'run', 'extract-csv', 'plot', and 'validate' subcommands to their respective handler functions, and the parsing of specific flags like --vxdomain and --target-resolution. Mocking is used to isolate the CLI logic from the underlying implementations, allowing for focused testing of argument parsing and dispatch without side effects. Proper CLI behaviour is essential for users to interact with the tool effectively and for developers to maintain confidence in the command-line interface as the code evolves. """
 
     def test_no_subcommand_exits(self) -> None:
         """
@@ -356,13 +340,8 @@ class TestMain:
             assert mock_pp.call_args[1]["nprocs"] == 4
 
 
-# -----------------------------------------------------------------------
-# CLI target_resolution ValueError branch
-# -----------------------------------------------------------------------
-
-
 class TestCliTargetResolutionValueError:
-    """Lines 130-131: target_resolution not 'obs'/'fcst' and not a float."""
+    """ Tests for the branch in _cmd_run that handles ValueError when parsing --target-resolution. If the string cannot be converted to float, the code should catch the exception and leave the value as-is, allowing non-numeric strings like 'obs' or 'fcst' to pass through. This test confirms that the ValueError branch is reached without crashing and that TaskManager is still instantiated successfully with the original string value. """
 
     def test_invalid_resolution_string_passes_through(self) -> None:
         """
@@ -389,13 +368,8 @@ class TestCliTargetResolutionValueError:
         MockTM.assert_called_once()
 
 
-# -----------------------------------------------------------------------
-# CLI __main__ entry point
-# -----------------------------------------------------------------------
-
-
 class TestCliMainEntryPoint:
-    """Line 376: if __name__ == '__main__': main()."""
+    """ Tests for the module-level guard that calls main() when __name__ == '__main__'. This test simulates the guard block by injecting a mock main function into an exec context and confirming it is called exactly once. The guard ensures the CLI is invocable directly as a script in addition to being called from entry_points. """
 
     def test_main_module(self) -> None:
         """
@@ -410,13 +384,8 @@ class TestCliMainEntryPoint:
             mock_main.assert_called_once()
 
 
-# -----------------------------------------------------------------------
-# CLI cache-dir, mpas-grid-file, and auto-cache branches
-# -----------------------------------------------------------------------
-
-
 class TestCliOverrideBranches:
-    """Cover --cache-dir, --mpas-grid-file, and auto cache_dir branches."""
+    """ Tests for the CLI override branches covering --cache-dir, --mpas-grid-file, and automatic cache_dir derivation. These tests ensure that the CLI flags correctly modify the configuration object before TaskManager instantiation, allowing users to control cache paths and grid file locations. """
 
     def test_run_with_cache_dir(self) -> None:
         """

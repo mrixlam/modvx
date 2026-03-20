@@ -32,7 +32,7 @@ def fm() -> FileManager:
 
 
 class TestForecastPath:
-    """Tests for get_forecast_filepath verifying that MPAS diagnostic file paths are constructed correctly from valid-time and cycle arguments."""
+    """ Tests for get_forecast_filepath verifying correct construction of MPAS diagnostic file paths based on valid time and forecast cycle. These tests ensure that the filename formatting and directory structure align with the expected conventions used in the forecast data storage, which is critical for the pipeline to locate and load the correct NetCDF files for verification without manual path adjustments."""
 
     def test_mpas_diag_path(self, fm: FileManager) -> None:
         """
@@ -59,7 +59,7 @@ class TestForecastPath:
 
 
 class TestObsHourIndex:
-    """Tests for get_observation_hour_index verifying the mapping of valid times to zero-based hourly indices within FIMERG daily observation files."""
+    """ Tests for get_observation_hour_index verifying correct mapping of valid times to hourly accumulation indices in FIMERG daily files. These tests confirm that the index calculation correctly handles the 01:00–00:00 UTC accumulation window used by FIMERG, including the critical midnight boundary case where 00:00 belongs to the previous day's file. Accurate index mapping is essential to ensure that the correct hourly observation data is loaded for verification against forecasts, preventing off-by-one errors that could lead to misaligned comparisons. """
 
     def test_index_0(self) -> None:
         """
@@ -98,7 +98,7 @@ class TestObsHourIndex:
 
 
 class TestGroupObsTimes:
-    """Tests for group_observation_times_by_date verifying correct grouping of valid times into FIMERG daily file buckets, including midnight crossover handling."""
+    """ Tests for group_observation_times_by_date verifying correct grouping of valid times into FIMERG daily file buckets, including midnight crossover handling. These tests confirm that valid times are grouped under the correct date keys based on the 01:00–00:00 UTC accumulation window, ensuring that midnight times are associated with the prior day's group. Accurate grouping is critical for the pipeline to load the correct daily FIMERG files and extract the appropriate hourly bands for verification without manual adjustments. """
 
     def test_single_day(self) -> None:
         """
@@ -133,7 +133,7 @@ class TestGroupObsTimes:
 
 
 class TestFcstCacheKey:
-    """Tests for _forecast_cache_key deterministic key generation."""
+    """ Tests for _forecast_cache_key deterministic key generation. These tests ensure that the cache key uniquely identifies a forecast based on the experiment name, initialization time, valid time, and accumulation step, preventing collisions in the in-memory and on-disk caches. By verifying that different valid times, initialization times, and experiment names yield distinct keys, we can confirm that the caching mechanism will not inadvertently overwrite or mix forecast data from different runs or lead times, which is essential for accurate verification results. """
 
     def test_key_format(self, fm: FileManager) -> None:
         """Key must encode experiment name, init string, valid time, and step."""
@@ -161,9 +161,76 @@ class TestFcstCacheKey:
 
 
 class TestFcstMemCache:
-    """Tests for the in-memory forecast cache dict."""
+    """ Tests for the in-memory forecast cache dict. These tests ensure that the cache dictionary is correctly initialized and accessible, providing a place to store forecast data in memory for quick retrieval during verification. """
 
     def test_cache_dict_exists(self, fm: FileManager) -> None:
         assert hasattr(fm, "_fcst_mem_cache")
         assert isinstance(fm._fcst_mem_cache, dict)
         assert len(fm._fcst_mem_cache) == 0
+
+
+class TestAccumulateForecastsPrecipAccum:
+    """ Tests for accumulate_forecasts_precip_accum multi-step accumulation. These tests verify that the method correctly handles both single-step and multi-step accumulation scenarios, ensuring that precipitation totals are accurately computed over the configured accumulation window. """
+
+    def test_delegates_when_accum_equals_step(self) -> None:
+        """When precip_accum_hours == forecast_step_hours, delegates to accumulate_forecasts."""
+        from unittest.mock import patch, MagicMock # noqa: F401
+        import numpy as np
+        import xarray as xr
+
+        cfg = ModvxConfig(base_dir="/work", mpas_grid_file="grid/x1.grid.nc",
+                          forecast_step_hours=1, precip_accum_hours=0)
+        fm_obj = FileManager(cfg)
+        mock_da = xr.DataArray(np.ones((5, 5)), dims=["latitude", "longitude"])
+        vt = datetime.datetime(2024, 9, 17, 0)
+
+        with patch.object(fm_obj, "accumulate_forecasts", return_value=mock_da) as mock_single:
+            result = fm_obj.accumulate_forecasts_precip_accum(vt, "2024091700")
+            mock_single.assert_called_once_with(vt, "2024091700")
+            assert result is mock_da
+
+    def test_sums_multiple_steps(self) -> None:
+        """When precip_accum_hours > forecast_step_hours, sums N sub-step accumulations."""
+        from unittest.mock import patch, call
+        import numpy as np
+        import xarray as xr
+
+        cfg = ModvxConfig(base_dir="tests/testdata/data/fcst/work", mpas_grid_file="grid/x1.grid.nc",
+                          forecast_step_hours=1, precip_accum_hours=3)
+        fm_obj = FileManager(cfg)
+        mock_da = xr.DataArray(np.ones((5, 5)), dims=["latitude", "longitude"])
+        vt = datetime.datetime(2024, 9, 17, 0)
+
+        fm_obj._fcst_mem_cache.clear()
+        
+        with patch.object(FileManager, "accumulate_forecasts", return_value=mock_da) as mock_single:
+            result = fm_obj.accumulate_forecasts_precip_accum(vt, "2024091700")
+            assert mock_single.call_count == 3
+            expected_calls = [
+                call(datetime.datetime(2024, 9, 17, 0), "2024091700"),
+                call(datetime.datetime(2024, 9, 17, 1), "2024091700"),
+                call(datetime.datetime(2024, 9, 17, 2), "2024091700"),
+            ]
+            mock_single.assert_has_calls(expected_calls)
+            assert float(result.values[0, 0]) == pytest.approx(3.0)
+
+
+class TestAccumulateObsPrecipAccum:
+    """ Tests for accumulate_observations_precip_accum multi-step accumulation. These tests verify that the method correctly handles both single-step and multi-step accumulation scenarios, ensuring that observation precipitation totals are accurately computed over the configured accumulation window. """
+
+    def test_delegates_when_accum_equals_step(self) -> None:
+        """When precip_accum_hours == forecast_step_hours, delegates to accumulate_observations."""
+        from unittest.mock import patch 
+        import numpy as np
+        import xarray as xr
+
+        cfg = ModvxConfig(base_dir="tests/testdata/data/fcst", mpas_grid_file="grid/x1.grid.nc",
+                          forecast_step_hours=1, precip_accum_hours=0)
+        fm_obj = FileManager(cfg)
+        mock_da = xr.DataArray(np.ones((5, 5)), dims=["latitude", "longitude"])
+        vt = datetime.datetime(2024, 9, 17, 0)
+
+        with patch.object(fm_obj, "accumulate_observations", return_value=mock_da) as mock_single:
+            result = fm_obj.accumulate_observations_precip_accum(vt)
+            mock_single.assert_called_once_with(vt)
+            assert result is mock_da

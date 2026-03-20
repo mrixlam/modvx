@@ -26,7 +26,7 @@ from modvx.config import (
 
 
 class TestModvxConfig:
-    """Unit tests for the ModvxConfig dataclass and its computed helper methods."""
+    """ Tests for the ModvxConfig dataclass, which encapsulates all configuration parameters for the MODvx verification workflow. These tests cover default value initialization, path resolution logic, and the correct functioning of computed properties that convert integer hour fields to datetime.timedelta objects. Ensuring the integrity of ModvxConfig is critical for the proper operation of the entire pipeline, as it serves as the central source of truth for all configuration parameters used in forecast cycle generation, file management, and verification logic. """
 
     def test_defaults(self) -> None:
         """
@@ -69,7 +69,7 @@ class TestModvxConfig:
 
 
 class TestLoadConfig:
-    """Round-trip tests verifying YAML deserialization into ModvxConfig instances."""
+    """ Tests for the load_config_from_yaml function, which parses a YAML file into a ModvxConfig instance. These tests cover successful loading of a well-formed YAML file, including field coercion and type parsing, as well as error handling when the specified file does not exist. Proper loading of configuration from YAML is critical for user flexibility and ease of use in specifying verification parameters without modifying code. """
 
     def test_load_simple_yaml(self, tmp_path: Path) -> None:
         """
@@ -114,7 +114,7 @@ final_cycle_start: "20240110T00"
 
 
 class TestMergeCLI:
-    """Tests for CLI-level override merging into an existing ModvxConfig instance."""
+    """ Tests for the apply_cli_overrides function, which merges a dictionary of CLI overrides into a base ModvxConfig instance. These tests confirm that non-None override values replace corresponding fields in the base config, while None values are ignored to preserve existing settings. They also verify that unknown keys in the override dictionary do not cause errors and are simply skipped. This functionality is essential for allowing users to flexibly override configuration parameters from the command line without risking unintended mutations of the base config or crashes due to unrecognized arguments. """
 
     def test_override_experiment(self) -> None:
         """
@@ -153,13 +153,8 @@ class TestMergeCLI:
         assert merged.experiment_name == base.experiment_name
 
 
-# -----------------------------------------------------------------------
-# Config gap-closing tests
-# -----------------------------------------------------------------------
-
-
 class TestConfigProperties:
-    """Cover observation_interval, cycle_interval properties and _parse_datetime_str edge cases."""
+    """ Tests for computed properties in ModvxConfig that convert integer hour fields to datetime.timedelta objects. These tests confirm that the properties correctly perform the conversion and return the expected timedelta values based on the input hours. Accurate timedelta properties are essential for time-based calculations throughout the verification workflow, such as iterating over forecast steps and observation intervals. """
 
     def test_observation_interval_property(self) -> None:
         """
@@ -210,3 +205,53 @@ class TestConfigProperties:
         """
         with pytest.raises(ValueError, match="Cannot parse datetime"):
             _parse_datetime_string("not-a-date")
+
+
+class TestPrecipAccumConfig:
+    """ Tests for the precip_accum_hours configuration parameter and its related computed properties in ModvxConfig. These tests verify that precip_accum_hours defaults to 0, that effective_precip_accum_hours correctly falls back to forecast_step_hours when precip_accum_hours is 0, and that the precip_accum property returns the correct timedelta based on the accumulation hours. Proper handling of precipitation accumulation settings is crucial for ensuring that the verification logic correctly accounts for accumulated precipitation fields when configured to do so, while still allowing users to disable accumulation by setting it to zero. """
+
+    def test_default_zero(self) -> None:
+        """Verify that precip_accum_hours defaults to 0."""
+        cfg = ModvxConfig()
+        assert cfg.precip_accum_hours == 0
+
+    def test_effective_falls_back_to_forecast_step(self) -> None:
+        """When precip_accum_hours is 0, effective_precip_accum_hours equals forecast_step_hours."""
+        cfg = ModvxConfig(forecast_step_hours=12, precip_accum_hours=0)
+        assert cfg.effective_precip_accum_hours == 12
+
+    def test_effective_uses_explicit_value(self) -> None:
+        """When precip_accum_hours > 0, effective_precip_accum_hours returns that value."""
+        cfg = ModvxConfig(forecast_step_hours=1, precip_accum_hours=3)
+        assert cfg.effective_precip_accum_hours == 3
+
+    def test_precip_accum_timedelta_fallback(self) -> None:
+        """precip_accum property returns forecast_step when precip_accum_hours is 0."""
+        cfg = ModvxConfig(forecast_step_hours=6, precip_accum_hours=0)
+        assert cfg.precip_accum == datetime.timedelta(hours=6)
+
+    def test_precip_accum_timedelta_explicit(self) -> None:
+        """precip_accum property returns the explicit accumulation period."""
+        cfg = ModvxConfig(forecast_step_hours=1, precip_accum_hours=3)
+        assert cfg.precip_accum == datetime.timedelta(hours=3)
+
+    def test_yaml_round_trip(self, tmp_path: Path) -> None:
+        """Verify precip_accum_hours is correctly loaded from YAML."""
+        yaml_text = """\
+experiment_name: "accum_test"
+forecast_step_hours: 1
+observation_interval_hours: 1
+precip_accum_hours: 6
+"""
+        f = tmp_path / "accum.yaml"
+        f.write_text(yaml_text)
+        cfg = load_config_from_yaml(f)
+        assert cfg.precip_accum_hours == 6
+        assert cfg.effective_precip_accum_hours == 6
+
+    def test_cli_override(self) -> None:
+        """Verify CLI override of precip_accum_hours works correctly."""
+        base = ModvxConfig(precip_accum_hours=0)
+        merged = apply_cli_overrides(base, {"precip_accum_hours": 3})
+        assert merged.precip_accum_hours == 3
+        assert base.precip_accum_hours == 0

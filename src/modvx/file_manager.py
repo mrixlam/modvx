@@ -444,6 +444,84 @@ class FileManager:
         return remapped
 
 
+    def accumulate_forecasts_precip_accum(
+        self,
+        valid_time: datetime.datetime,
+        init_string: str,
+    ) -> xr.DataArray:
+        """
+        Compute accumulated precipitation over the configured ``precip_accum_hours`` window by summing individual forecast-step accumulations. When ``precip_accum_hours`` equals ``forecast_step_hours``, this delegates directly to :meth:`accumulate_forecasts`. Otherwise, it sums N = effective_precip_accum_hours / forecast_step_hours individually remapped forecast-step accumulations. Results are cached using a key that encodes the accumulation period.
+
+        Parameters:
+            valid_time (datetime.datetime): Start of the multi-step accumulation window.
+            init_string (str): Cycle initialisation string in ``YYYYmmddHH`` format.
+
+        Returns:
+            xr.DataArray: Accumulated precipitation over the full accumulation period in millimetres.
+        """
+        # Retrieve the configuration for use in processing steps.
+        config = self.config
+
+        # Extract the effective accumulation period in hours from configuration
+        accum_h = config.effective_precip_accum_hours
+
+        # Extract the forecast step in hours from configuration
+        step_h = config.forecast_step_hours
+
+        # If the accumulation period equals the forecast step, delegate directly to the single-step accumulation method 
+        if accum_h == step_h:
+            return self.accumulate_forecasts(valid_time, init_string)
+
+        # Generate a cache key for the full-window accumulation 
+        key = (
+            f"fcst_accum_{config.experiment_name}_{init_string}_"
+            f"{valid_time.strftime('%Y%m%d%H')}_{accum_h}h"
+        )
+
+        # Check the in-memory cache for the full-window accumulated precipitation using the generated key
+        cached = self._load_cache_entry(key, self._fcst_mem_cache)
+
+        # If a cached result is found in either the in-memory or disk cache, return it immediately
+        if cached is not None:
+            return cached
+
+        # Calculate the number of forecast steps to accumulate
+        n_steps = accum_h // step_h
+
+        # Initialize an empty variable to hold the total accumulated precipitation 
+        total: Optional[xr.DataArray] = None
+
+        # Loop through each forecast step and accumulate total precipitation 
+        for i in range(n_steps):
+            # Calculate the valid time for this sub-step
+            sub_valid = valid_time + datetime.timedelta(hours=i * step_h)
+
+            # Compute the accumulated precipitation for this sub-step using the existing method
+            step_da = self.accumulate_forecasts(sub_valid, init_string)
+
+            # Extract total by summing the step accumulation into it
+            total = step_da if total is None else total + step_da
+
+        # Ensure that at least one forecast sub-step was accumulated
+        assert total is not None, "No forecast sub-steps accumulated"
+
+        # Update metadata for the total accumulated precipitation field
+        total.attrs["units"] = "mm"
+        total.attrs["long_name"] = f"{accum_h}h accumulated precipitation"
+
+        # Save the total accumulated precipitation to both the in-memory and disk caches 
+        self._save_cache_entry(key, total, self._fcst_mem_cache)
+
+        # Log the successful accumulation of multiple forecast steps for debugging purposes.
+        logger.debug(
+            "Accumulated %dh forecast from %d × %dh sub-steps at %s",
+            accum_h, n_steps, step_h, valid_time,
+        )
+
+        # Return total accumulated precipitation
+        return total
+
+
     def _observation_cache_key(self, valid_time: datetime.datetime) -> str:
         """
         Generate a deterministic string cache key for an accumulated observation field. The key encodes the valid time and forecast step duration, ensuring that cache entries are unique per (valid_time, accumulation_length) combination. The same key is used to check both the in-memory dict cache and the shared disk cache directory, making it straightforward to coordinate cache reads across workers.
@@ -488,6 +566,100 @@ class FileManager:
         accumulated_da = self._compute_observation_accumulation_raw(valid_time)
 
         # Save the accumulated observation DataArray to both the in-memory and disk caches 
+        self._save_cache_entry(key, accumulated_da, self._obs_mem_cache)
+
+        # Return the accumulated observation DataArray
+        return accumulated_da
+
+
+    def accumulate_observations_precip_accum(
+        self,
+        valid_time: datetime.datetime,
+    ) -> xr.DataArray:
+        """
+        Load and accumulate FIMERG observation data over the configured ``precip_accum_hours`` window. When ``precip_accum_hours`` equals ``forecast_step_hours``, this delegates directly to :meth:`accumulate_observations`. Otherwise, it sums hourly observation slices from ``valid_time + obs_interval`` to ``valid_time + precip_accum``. Results are cached using a key that encodes the accumulation period.
+
+        Parameters:
+            valid_time (datetime.datetime): Start of the observation accumulation window.
+
+        Returns:
+            xr.DataArray: Accumulated hourly precipitation sum over the full accumulation period.
+        """
+        # Retrieve the configuration for use in processing steps.
+        config = self.config
+
+        # Extract the effective accumulation period in hours from configuration
+        accum_h = config.effective_precip_accum_hours
+
+        # Extract the forecast step in hours from configuration 
+        step_h = config.forecast_step_hours
+
+        # If the accumulation period equals the forecast step, delegate directly to the single-step accumulation method
+        if accum_h == step_h:
+            return self.accumulate_observations(valid_time)
+
+        # Generate a cache key for the full-window observation accumulation using the valid time and accumulation period
+        key = f"obs_accum_{valid_time.strftime('%Y%m%d%H')}_{accum_h}h"
+
+        # First check the in-memory cache for the full-window accumulated observation using the generated key
+        cached = self._load_cache_entry(key, self._obs_mem_cache)
+
+        # If a cached result is found in either the in-memory or disk cache, return it immediately
+        if cached is not None:
+            return cached
+
+        # Calculate the start time of the accumulation window
+        start_time = valid_time + config.observation_interval
+
+        # Calculate the end time of the accumulation window
+        end_time = valid_time + config.precip_accum
+
+        # Group the observation end-times by their corresponding daily FIMERG file 
+        times_by_date = self.group_observation_times_by_date(
+            start_time, end_time, config.observation_interval
+        )
+
+        # Initialize an empty variable to hold the accumulated DataArray
+        accumulated_da: Optional[xr.DataArray] = None
+
+        # Initialize a counter to track the number of hourly slices accumulated 
+        count = 0
+
+        # Loop through the grouped observation times by date 
+        for date_key, times in sorted(times_by_date.items()):
+            # Resolve the path to the daily FIMERG file for this date key
+            daily_file = self.get_observation_filepath(date_key)
+
+            # Log the daily file being loaded for debugging purposes
+            logger.debug("Loading obs file: %s", daily_file)
+
+            # Read the daily dataset from the resolved file path using xarray
+            daily_dataset = xr.load_dataset(daily_file)
+
+            # Loop through the observation end-times for this date key
+            for obs_time in times:
+                # Get the zero-based hour index in the daily observattion file
+                index = self.get_observation_hour_index(obs_time)
+
+                # Extract the hourly slice corresponding to the observation end-time index
+                slice_da = daily_dataset[config.obs_var_name].isel(time=index)
+
+                # Accumulate the hourly slice into the total, initializing if this is the first slice
+                accumulated_da = slice_da if accumulated_da is None else accumulated_da + slice_da
+
+                # Increase the counter for each hourly slice accumulated
+                count += 1
+
+            # Close the daily dataset to free memory
+            daily_dataset.close()
+
+        # Assert that at least one observation slice was accumulated to catch silent data gaps early.
+        assert accumulated_da is not None, "No observation data for accumulation"
+
+        # Log the number of hourly slices accumulated for debugging purposes.
+        logger.debug("Accumulated %d obs hours (%dh window) from %s", count, accum_h, valid_time)
+
+        # Save the accumulated observation DataArray to both the in-memory and disk caches
         self._save_cache_entry(key, accumulated_da, self._obs_mem_cache)
 
         # Return the accumulated observation DataArray
@@ -591,7 +763,7 @@ class FileManager:
         init_str = cycle_start.strftime("%Y%m%d%H")
 
         # Compute the end time of the accumulation window
-        end_time = valid_time + config.forecast_step
+        end_time = valid_time + config.precip_accum
 
         # Extract the valid time string
         valid_str = end_time.strftime("%Y%m%d%H%M")
@@ -674,7 +846,7 @@ class FileManager:
         init_str = cycle_start.strftime("%Y%m%d%H")
 
         # Calculate the end time of the accumulation window for filename formatting
-        end_time = valid_time + config.forecast_step
+        end_time = valid_time + config.precip_accum
 
         # Format the valid time string for inclusion in the filename
         valid_str = end_time.strftime("%Y%m%d%H%M")
@@ -758,11 +930,11 @@ class FileManager:
         # Format the cycle initialization time as a string for inclusion in the output directory path 
         istr = cycle_start.strftime("%Y%m%d%H")
 
-        # Calculate the forecast step in hours from the configuration's forecast_step timedelta 
-        step_h = int(config.forecast_step.total_seconds() / 3600)
+        # Use the effective precipitation accumulation hours for output directory and filename
+        accum_h = config.effective_precip_accum_hours
 
-        # Format the forecast step duration for inclusion in the output directory path (e.g. "pp24h" for a 24-hour step)
-        pp_dir = f"pp{step_h}h"
+        # Format the accumulation duration for inclusion in the output directory path (e.g. "pp3h" for 3-hour accum)
+        pp_dir = f"pp{accum_h}h"
 
         # Construct the output directory path for the verification results 
         odir = os.path.join(
@@ -779,10 +951,10 @@ class FileManager:
         # Extract and format the threshold value for inclusion in the filename
         tstr = format_threshold_for_filename(threshold)
 
-        # Construct a filename that encodes the region name, forecast step, threshold percentile, and window size.
+        # Construct a filename that encodes the region name, accumulation period, threshold percentile, and window size.
         fname = (
             f"modvx_metrics_type_neighborhood_{region_name.lower()}_"
-            f"{step_h}h_indep_thresh{tstr}percent_window{window_size}.nc"
+            f"{accum_h}h_indep_thresh{tstr}percent_window{window_size}.nc"
         )
 
         # Construct the output file path
@@ -836,11 +1008,11 @@ class FileManager:
         # Format the cycle initialization time as a string for inclusion in the output directory path
         istr = cycle_start.strftime("%Y%m%d%H")
 
-        # Calculate the forecast step in hours from the configuration's forecast_step timedelta
-        step_h = int(config.forecast_step.total_seconds() / 3600)
+        # Use the effective precipitation accumulation hours for output directory and filename
+        accum_h = config.effective_precip_accum_hours
 
-        # Format the forecast step duration for inclusion in the output directory path (e.g. "pp24h" for a 24-hour step)
-        pp_dir = f"pp{step_h}h"
+        # Format the accumulation duration for inclusion in the output directory path (e.g. "pp3h" for 3-hour accum)
+        pp_dir = f"pp{accum_h}h"
 
         # Construct the output directory path for the verification results
         odir = os.path.join(
@@ -857,10 +1029,10 @@ class FileManager:
         # Extract and format the threshold value for inclusion in the filename
         tstr = format_threshold_for_filename(threshold)
 
-        # Construct a filename that encodes the region name and threshold percentile for contingency results.
+        # Construct a filename that encodes the region name, accumulation period, and threshold percentile for contingency results.
         fname = (
             f"modvx_metrics_type_contingency_{region_name.lower()}_"
-            f"{step_h}h_indep_thresh{tstr}percent.nc"
+            f"{accum_h}h_indep_thresh{tstr}percent.nc"
         )
 
         # Construct the output file path

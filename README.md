@@ -76,6 +76,7 @@ forecast_step_hours: 12        # interval between forecast output files (hours)
 observation_interval_hours: 1  # accumulation window of the observation dataset (hours)
 cycle_interval_hours: 24       # interval between initialisation cycles (hours)
 forecast_length_hours: 48      # total lead time to verify (hours)
+precip_accum_hours: 0          # hours over which to accumulate precip; set to 0 to disable accumulation and use raw fields
 
 # ---- MPAS mesh settings (leave mpas_grid_file empty for regular-grid input) ----
 

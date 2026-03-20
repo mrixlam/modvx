@@ -26,10 +26,6 @@ from modvx.parallel import (
 )
 
 
-# -----------------------------------------------------------------------
-# Helper to build work-unit dicts
-# -----------------------------------------------------------------------
-
 def _make_unit(cycle: str, region: str) -> dict:
     """
     Build a minimal work-unit dictionary from a cycle string and region name. The returned dictionary contains cycle_start as a parsed datetime and region_name as a string, matching the structure expected by ParallelProcessor and TaskManager. This helper avoids repeating the datetime.strptime pattern across every test that needs synthetic work units.
@@ -47,12 +43,8 @@ def _make_unit(cycle: str, region: str) -> dict:
     }
 
 
-# -----------------------------------------------------------------------
-# Backend resolution
-# -----------------------------------------------------------------------
-
 class TestResolveBackend:
-    """Tests for _resolve_backend static method."""
+    """ Tests for _resolve_backend static method. """
 
     def test_explicit_serial(self) -> None:
         """
@@ -93,12 +85,8 @@ class TestResolveBackend:
             assert result == "serial"
 
 
-# -----------------------------------------------------------------------
-# Grouping helpers
-# -----------------------------------------------------------------------
-
 class TestGrouping:
-    """Tests for _group_key, _build_groups, and _assign_groups_round_robin."""
+    """ Tests for _group_key, _build_groups, and _assign_groups_round_robin. """
 
     def test_group_key(self) -> None:
         """
@@ -173,12 +161,8 @@ class TestGrouping:
             )
 
 
-# -----------------------------------------------------------------------
-# Serial backend
-# -----------------------------------------------------------------------
-
 class TestSerialBackend:
-    """Tests for serial execution path."""
+    """ Tests for serial execution path. """
 
     def test_serial_executes_all_units(self) -> None:
         """
@@ -216,12 +200,8 @@ class TestSerialBackend:
         assert calls == ["GLOBAL", "TROPICS"]
 
 
-# -----------------------------------------------------------------------
-# Multiprocessing worker functions
-# -----------------------------------------------------------------------
-
 class TestMpWorkerFunctions:
-    """Tests for _mp_init_worker and _mp_worker module-level functions."""
+    """ Tests for _mp_init_worker and _mp_worker module-level functions. """
 
     def test_init_worker_sets_global(self) -> None:
         """
@@ -250,12 +230,8 @@ class TestMpWorkerFunctions:
         fn.assert_called_once()
 
 
-# -----------------------------------------------------------------------
-# Multiprocessing backend (with mocked Pool)
-# -----------------------------------------------------------------------
-
 class TestMultiprocessingBackend:
-    """Tests for multiprocessing backend using mocked Pool."""
+    """ Tests for multiprocessing backend using mocked Pool. """
 
     def test_pool_called(self) -> None:
         """
@@ -280,12 +256,8 @@ class TestMultiprocessingBackend:
             mock_ctx.map.assert_called_once()
 
 
-# -----------------------------------------------------------------------
-# Properties
-# -----------------------------------------------------------------------
-
 class TestProperties:
-    """Tests for ParallelProcessor properties."""
+    """ Tests for ParallelProcessor properties. """
 
     def test_is_root_serial(self) -> None:
         """
@@ -311,13 +283,8 @@ class TestProperties:
         assert pp.size == 1
 
 
-# -----------------------------------------------------------------------
-# _ensure_mpi and auto-detection branches
-# -----------------------------------------------------------------------
-
-
 class TestEnsureMpiBranches:
-    """Cover _ensure_mpi success/failure paths and auto-detection of MPI."""
+    """ Cover _ensure_mpi success/failure paths and auto-detection of MPI. """
 
     def test_resolve_backend_auto_with_mpi_env(self) -> None:
         """
@@ -419,13 +386,8 @@ class TestEnsureMpiBranches:
         par.MPI = old_mpi
 
 
-# -----------------------------------------------------------------------
-# MPI backend constructor + _run_mpi
-# -----------------------------------------------------------------------
-
-
 class TestMpiBackend:
-    """Cover MPI constructor init and _run_mpi execution."""
+    """ Cover MPI constructor init and _run_mpi execution. """
 
     def _make_mpi_processor(
         self,

@@ -26,10 +26,6 @@ from modvx.config import ModvxConfig
 from modvx.file_manager import FileManager
 
 
-# -----------------------------------------------------------------------
-# Fixtures
-# -----------------------------------------------------------------------
-
 @pytest.fixture
 def tmp_cfg(tmp_path: Path) -> ModvxConfig:
     """
@@ -62,12 +58,8 @@ def fm(tmp_cfg: ModvxConfig) -> FileManager:
     return FileManager(tmp_cfg)
 
 
-# -----------------------------------------------------------------------
-# load_region_mask
-# -----------------------------------------------------------------------
-
 class TestLoadRegionMask:
-    """Tests for load_region_mask: loading, coordinate normalisation, and error paths."""
+    """ Tests for load_region_mask loading NetCDF masks and handling errors. """
 
     def test_loads_mask_from_netcdf(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
         """
@@ -119,12 +111,8 @@ class TestLoadRegionMask:
             fm.load_region_mask(str(mask_file))
 
 
-# -----------------------------------------------------------------------
-# Observation path & cache key
-# -----------------------------------------------------------------------
-
 class TestObservationPath:
-    """Tests for get_observation_filepath vintage fallback."""
+    """ Tests for get_observation_filepath path construction and vintage preference logic. """
 
     def test_fallback_to_first_vintage(self, fm: FileManager) -> None:
         """
@@ -156,7 +144,7 @@ class TestObservationPath:
 
 
 class TestObsCacheKey:
-    """Tests for _obs_cache_key deterministic key generation."""
+    """ Tests for _observation_cache_key formatting and consistency. """
 
     def test_key_format(self, fm: FileManager) -> None:
         """
@@ -170,12 +158,8 @@ class TestObsCacheKey:
         assert key == "obs_accum_2024091706_1h"
 
 
-# -----------------------------------------------------------------------
-# save_intermediate_precip
-# -----------------------------------------------------------------------
-
 class TestSaveIntermediatePrecip:
-    """Tests for save_intermediate_precip writing debug NetCDF files."""
+    """ Tests for save_intermediate_precip writing debug NetCDF files. """
 
     def test_writes_netcdf(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
         """
@@ -210,12 +194,8 @@ class TestSaveIntermediatePrecip:
         ds.close()
 
 
-# -----------------------------------------------------------------------
-# save_intermediate_binary
-# -----------------------------------------------------------------------
-
 class TestSaveIntermediateBinary:
-    """Tests for save_intermediate_binary writing debug binary mask NetCDF files."""
+    """ Tests for save_intermediate_binary writing debug binary mask NetCDF files. """
 
     def test_writes_netcdf(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
         """
@@ -244,12 +224,8 @@ class TestSaveIntermediateBinary:
         ds.close()
 
 
-# -----------------------------------------------------------------------
-# save_fss_results
-# -----------------------------------------------------------------------
-
 class TestSaveFssResults:
-    """Tests for save_fss_results writing FSS NetCDF files."""
+    """ Tests for save_fss_results writing FSS NetCDF files. """
 
     def test_writes_fss_only(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
         """
@@ -298,12 +274,8 @@ class TestSaveFssResults:
         assert "97p5" in name or "97.5" in name
 
 
-# -----------------------------------------------------------------------
-# save_contingency_results
-# -----------------------------------------------------------------------
-
 class TestSaveContingencyResults:
-    """Tests for save_contingency_results writing contingency NetCDF files."""
+    """ Tests for save_contingency_results writing contingency NetCDF files. """
 
     def test_writes_contingency_metrics(self, fm: FileManager, tmp_cfg: ModvxConfig) -> None:
         """
@@ -352,12 +324,8 @@ class TestSaveContingencyResults:
         assert "97p5" in name or "97.5" in name
 
 
-# -----------------------------------------------------------------------
-# Forecast cache layers
-# -----------------------------------------------------------------------
-
 class TestForecastCaching:
-    """Tests for forecast cache paths in accumulate_forecasts."""
+    """ Tests for forecast cache paths in accumulate_forecasts. """
 
     def test_memory_cache_hit(self, tmp_path: Path) -> None:
         """
@@ -416,12 +384,8 @@ class TestForecastCaching:
         np.testing.assert_array_equal(result.values, da.values)
 
 
-# -----------------------------------------------------------------------
-# extract_fss_to_csv
-# -----------------------------------------------------------------------
-
 class TestExtractFssToCsv:
-    """Tests for extract_fss_to_csv scanning and writing CSV files."""
+    """ Tests for extract_fss_to_csv scanning and writing CSV files. """
 
     def _create_output_tree(self, base: Path) -> None:
         """
@@ -500,12 +464,8 @@ class TestExtractFssToCsv:
         assert len(csv_files) == 0
 
 
-# -----------------------------------------------------------------------
-# accumulate_observations cache layers
-# -----------------------------------------------------------------------
-
 class TestObservationCaching:
-    """Tests for the multi-level observation cache in accumulate_observations."""
+    """ Tests for the multi-level observation cache in accumulate_observations. """
 
     def test_memory_cache_hit(self, fm: FileManager) -> None:
         """
@@ -549,10 +509,6 @@ class TestObservationCaching:
         np.testing.assert_array_equal(result.values, da.values)
 
 
-# -----------------------------------------------------------------------
-# Helper for tests that need full directory-based ModvxConfig
-# -----------------------------------------------------------------------
-
 def _make_cfg(tmp_path: Path) -> ModvxConfig:
     """
     Return a minimal ModvxConfig rooted in tmp_path with standard sub-directory names. This module-level helper is used by gap-closing tests that need a full configuration without access to the class-scoped fixtures. All directory keys are set to single-word relative paths to keep configuration construction concise.
@@ -573,13 +529,8 @@ def _make_cfg(tmp_path: Path) -> ModvxConfig:
     )
 
 
-# -----------------------------------------------------------------------
-# accumulate_forecasts (delegates to mpas_reader)
-# -----------------------------------------------------------------------
-
-
 class TestAccumulateForecasts:
-    """Cover FileManager.accumulate_forecasts which delegates to mpas_reader."""
+    """ Tests for FileManager.accumulate_forecasts which delegates to mpas_reader. """
 
     def test_accumulate_forecasts_calls_mpas_reader(self, tmp_path: Path) -> None:
         """
@@ -619,13 +570,8 @@ class TestAccumulateForecasts:
             assert result.shape == (3, 3)
 
 
-# -----------------------------------------------------------------------
-# Disk cache write in accumulate_observations
-# -----------------------------------------------------------------------
-
-
 class TestObsDiskCacheWrite:
-    """Cover the disk cache WRITE path in accumulate_observations."""
+    """ Tests for the disk cache WRITE path in accumulate_observations. """
 
     def test_disk_cache_written(self, tmp_path: Path) -> None:
         """
@@ -659,13 +605,8 @@ class TestObsDiskCacheWrite:
             mock_raw.assert_not_called()
 
 
-# -----------------------------------------------------------------------
-# _accumulate_observations_raw
-# -----------------------------------------------------------------------
-
-
 class TestAccumulateObservationsRaw:
-    """Cover FileManager._compute_observation_accumulation_raw."""
+    """ Tests for FileManager._compute_observation_accumulation_raw. """
 
     def test_raw_accumulation(self, tmp_path: Path) -> None:
         """
@@ -699,13 +640,8 @@ class TestAccumulateObservationsRaw:
         assert result.shape == (5, 5)
 
 
-# -----------------------------------------------------------------------
-# extract_fss_to_csv: legacy format and multi-metric format
-# -----------------------------------------------------------------------
-
-
 class TestExtractFssToCsvLegacy:
-    """Cover the legacy single-array format branch in extract_fss_to_csv."""
+    """ Tests for the legacy single-array format branch in extract_fss_to_csv. """
 
     def test_legacy_format_extraction(self, tmp_path: Path) -> None:
         """
@@ -786,12 +722,8 @@ class TestExtractFssToCsvLegacy:
         assert df["domain"].iloc[0] == "tropics"
 
 
-# -----------------------------------------------------------------------
-# Internal parsing helpers
-# -----------------------------------------------------------------------
-
 class TestFileManagerParsingHelpers:
-    """Tests for internal parsing helper branches."""
+    """ Tests for internal parsing helper branches. """
 
     def test_extract_file_context_no_output(self) -> None:
         """
@@ -831,13 +763,8 @@ class TestFileManagerParsingHelpers:
         np.testing.assert_allclose(metrics["fss"], [0.1, 0.2])
 
 
-# -----------------------------------------------------------------------
-# extract_fss_to_csv skip/exception branches
-# -----------------------------------------------------------------------
-
-
 class TestExtractFssToCsvSkipPaths:
-    """Cover various continue/exception branches in extract_fss_to_csv."""
+    """ Tests for various continue/exception branches in extract_fss_to_csv. """
 
     def _setup_nc(
         self, tmp_path: Path, subpath: str, content_ds: xr.Dataset

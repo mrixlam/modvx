@@ -60,6 +60,9 @@ class TaskManager:
         # Initialize the performance metrics calculator with the provided configuration
         self.perf_metrics = PerfMetrics(config)
 
+        # Validate precip_accum_hours constraints
+        self._validate_precip_accum()
+
         # Configure logging based on the config settings to ensure that all components use a consistent logging setup. 
         self._setup_logging()
 
@@ -107,6 +110,40 @@ class TaskManager:
 
         # Configure the root logger with the determined level, format, date format, and handlers. 
         logging.basicConfig(level=level, format=fmt, datefmt=datefmt, handlers=handlers, force=True)
+
+
+    def _validate_precip_accum(self) -> None:
+        """
+        This helper method validates the constraints on the effective precipitation accumulation period derived from the config settings. Specifically, it checks that when accumulation is enabled (i.e., effective_precip_accum_hours > 0), the accumulation period must be a multiple of both the forecast step and the observation interval to ensure that the necessary data can be loaded and processed without misalignment. If any of these constraints are violated, a ValueError is raised with a descriptive message indicating the nature of the violation and the relevant config values.
+
+        Raises:
+            ValueError: When the constraints are violated.
+        """
+        # Extract the config for easy access within this method.
+        config = self.config
+
+        # Extract the effective accumulation period from the config for validation.
+        accum = config.effective_precip_accum_hours
+
+        # The forecast step constraint is always relevant when accumulation is enabled (i.e., accum > 0) 
+        step = config.forecast_step_hours
+
+        # The accumulation period of 0 (disabled) is always valid, so skip validation in that case.
+        obs_int = config.observation_interval_hours
+
+        # The accumulation period must be a multiple of the forecast step to ensure that we can accumulate an integer number of steps 
+        if accum % step != 0:
+            raise ValueError(
+                f"precip_accum_hours ({config.precip_accum_hours}) must be a multiple "
+                f"of forecast_step_hours ({step}). Effective value: {accum}."
+            )
+        
+        # The observation interval constraint is only relevant if accumulation is enabled (i.e., accum > 0)
+        if accum % obs_int != 0:
+            raise ValueError(
+                f"precip_accum_hours ({config.precip_accum_hours}) must be a multiple "
+                f"of observation_interval_hours ({obs_int}). Effective value: {accum}."
+            )
 
 
     def build_work_units(self) -> List[Dict[str, Any]]:
@@ -180,10 +217,10 @@ class TaskManager:
         config = self.config
 
         # Compute the accumulated forecast for the valid time and cycle using FileManager. 
-        accumulated_forecast = self.file_manager.accumulate_forecasts(valid_time, cycle_init_str)
+        accumulated_forecast = self.file_manager.accumulate_forecasts_precip_accum(valid_time, cycle_init_str)
 
         # Compute the accumulated observation for the valid time using FileManager. 
-        accumulated_observation = self.file_manager.accumulate_observations(valid_time)
+        accumulated_observation = self.file_manager.accumulate_observations_precip_accum(valid_time)
 
         # Prepare the forecast and observation data by regridding to a common grid, applying the region mask, and performing any necessary unit conversions. 
         forecast_data, observation_data = self.data_validator.prepare(
@@ -355,9 +392,9 @@ class TaskManager:
             self.config.resolve_mask_path(mask_file_path)
         )
 
-        # Generate the list of valid times for this cycle based on the forecast length and step defined in the config. 
+        # Generate the list of valid times for this cycle, stepping by the effective accumulation period.
         valid_times = list(
-            iterate_valid_times(cycle_start, cycle_start + config.forecast_length, config.forecast_step)
+            iterate_valid_times(cycle_start, cycle_start + config.forecast_length, config.precip_accum)
         )
 
         # Initialize dictionaries to accumulate metrics across all valid times in the cycle.

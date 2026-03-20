@@ -10,6 +10,8 @@ MPASdiag/
 csv/
 plots/
 tests/testdata/data/output
+tests/testdata/data/debug
+tests/testdata/data/masks
 
 *.egg-info/
 *.egg

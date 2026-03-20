@@ -12,10 +12,11 @@ initial_cycle_start: "20240917T00"
 final_cycle_start:   "20240921T00"
 
 # MPAS diag files are hourly; accumulate over 1h windows
-forecast_step_hours:        1
+forecast_step_hours:         1
 observation_interval_hours:  1
 cycle_interval_hours:       24
 forecast_length_hours:       6
+precip_accum_hours:          3  # 0 = same as forecast_step_hours; set to 3 for 3h accum
 
 # Grid — regrid to obs grid after MPAS remapping
 target_resolution: "fcst"

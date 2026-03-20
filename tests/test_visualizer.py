@@ -36,10 +36,6 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend for CI
 
 
-# -----------------------------------------------------------------------
-# Fixtures
-# -----------------------------------------------------------------------
-
 def _make_csv(csv_dir: Path, experiment: str = "exp1") -> Path:
     """
     Create a minimal CSV file mimicking the output of extract_fss_to_csv for use in plot tests. The file contains six lead-time rows with realistic FSS, POD, FAR, CSI, FBIAS, and ETS values for a single GLOBAL domain entry at 90th-percentile threshold and window size 3. This shared helper avoids repeating DataFrame construction boilerplate across every visualizer test fixture.
@@ -108,12 +104,8 @@ def viz_setup(tmp_path: Path) -> tuple:
     return viz, csv_dir, plot_dir
 
 
-# -----------------------------------------------------------------------
-# Module-level constants
-# -----------------------------------------------------------------------
-
 class TestConstants:
-    """Verify module-level metric constants are defined correctly."""
+    """ Verify module-level metric constants are defined correctly. """
 
     def test_all_metrics_list(self) -> None:
         """
@@ -146,12 +138,8 @@ class TestConstants:
         assert "fbias" not in _BOUNDED_METRICS
 
 
-# -----------------------------------------------------------------------
-# Internal helpers
-# -----------------------------------------------------------------------
-
 class TestHelperFilters:
-    """Coverage for internal helper branches."""
+    """ Coverage for internal helper branches. """
 
     def test_filter_df_matches_window(self) -> None:
         """
@@ -245,7 +233,7 @@ class TestHelperFilters:
 
 
 class TestLeadtimeTicks:
-    """Coverage for lead-time tick helpers."""
+    """ Coverage for lead-time tick helpers. """
 
     def test_leadtime_tick_interval(self, tmp_path: Path) -> None:
         """
@@ -294,7 +282,7 @@ class TestLeadtimeTicks:
 # -----------------------------------------------------------------------
 
 class TestPlotFssVsLeadtime:
-    """Tests for plot_fss_vs_leadtime single-metric plot generation."""
+    """ Tests for plot_fss_vs_leadtime single-metric plot generation. """
 
     def test_creates_png(self, viz_setup) -> None:
         """
@@ -345,8 +333,7 @@ class TestPlotFssVsLeadtime:
             assert result is not None
 
     def test_bounded_metric_ylim(self, viz_setup) -> None:
-        """
-        Verify that plotting a bounded metric such as 'pod' does not raise an exception. Bounded metrics receive y-axis limits of [0, 1] during plot generation; this test confirms the y-limit clamping logic does not interfere with normal plot creation and that the result path is still returned.
+        """ Tests for plot_fss_vs_leadtime verifying that plotting a bounded metric such as 'pod' does not raise an exception. Bounded metrics receive y-axis limits of [0, 1] during plot generation; this test confirms the y-limit clamping logic does not interfere with normal plot creation and that the result path is still returned.
 
         Returns:
             None
@@ -407,12 +394,8 @@ class TestPlotFssVsLeadtime:
         assert result is None
 
 
-# -----------------------------------------------------------------------
-# plot_fss_difference
-# -----------------------------------------------------------------------
-
 class TestPlotFssDifference:
-    """Tests for plot_fss_difference (experiment - control) plots."""
+    """ Tests for plot_fss_difference (experiment - control) plots. """
 
     def test_creates_diff_plot(self, tmp_path: Path) -> None:
         """
@@ -493,12 +476,8 @@ class TestPlotFssDifference:
         assert result is None
 
 
-# -----------------------------------------------------------------------
-# generate_all_plots
-# -----------------------------------------------------------------------
-
 class TestGenerateAllPlots:
-    """Tests for generate_all_plots batch plot generation."""
+    """ Tests for generate_all_plots batch plot generation. """
 
     def test_generates_all_combos(self, viz_setup) -> None:
         """
@@ -568,12 +547,8 @@ class TestGenerateAllPlots:
         assert count == 1
 
 
-# -----------------------------------------------------------------------
-# list_available_options
-# -----------------------------------------------------------------------
-
 class TestListAvailableOptions:
-    """Tests for list_available_options CSV discovery."""
+    """ Tests for list_available_options CSV discovery. """
 
     def test_returns_options(self, viz_setup) -> None:
         """
@@ -627,12 +602,8 @@ class TestListAvailableOptions:
         assert windows == [3]
 
 
-# -----------------------------------------------------------------------
-# plot_horizontal_map
-# -----------------------------------------------------------------------
-
 class TestPlotHorizontalMap:
-    """Tests for plot_horizontal_map Cartopy map plotting."""
+    """ Tests for plot_horizontal_map Cartopy map plotting. """
 
     def test_creates_map(self, tmp_path: Path) -> None:
         """
@@ -682,10 +653,6 @@ class TestPlotHorizontalMap:
         assert "horizontal_map.png" in result
 
 
-# -----------------------------------------------------------------------
-# Helpers for visualizer gap tests
-# -----------------------------------------------------------------------
-
 def _write_csv(path: Path, rows: list) -> None:
     """
     Write a list of row dictionaries as a CSV file at the given path. This helper is used by gap-closing visualizer tests to create minimal CSV fixtures with specific domain or threshold values to trigger filtered-empty branches. The DataFrame is written with index=False to match the format expected by Visualizer.read_csv_data.
@@ -721,13 +688,8 @@ def _make_cfg(tmp_path: Path) -> ModvxConfig:
     )
 
 
-# -----------------------------------------------------------------------
-# Empty / filtered data branches
-# -----------------------------------------------------------------------
-
-
 class TestVisualizerEmptyFilteredData:
-    """Lines 122-123: filtered data empty → warning + continue."""
+    """ Tests for plot_fss_vs_leadtime handling of empty or filtered-out data. """
 
     def test_skip_when_filtered_empty(self, tmp_path: Path) -> None:
         """
@@ -753,7 +715,7 @@ class TestVisualizerEmptyFilteredData:
 
 
 class TestVisualizerDiffEmptyControl:
-    """Lines 242-243: control data empty in plot_fss_difference → return None."""
+    """ Tests for plot_fss_difference handling of empty control data. """
 
     def test_empty_control_returns_none(self, tmp_path: Path) -> None:
         """
@@ -781,7 +743,7 @@ class TestVisualizerDiffEmptyControl:
 
 
 class TestVisualizerDiffEmptyExperiment:
-    """Line 261: experiment filtered empty → continue past it."""
+    """ Tests for plot_fss_difference handling of empty experiment data. """
 
     def test_skip_empty_experiment(self, tmp_path: Path) -> None:
         """
@@ -811,7 +773,7 @@ class TestVisualizerDiffEmptyExperiment:
 
 
 class TestVisualizerCartopyMissing:
-    """Lines 324-326: cartopy import fails → return None."""
+    """ Tests for plot_horizontal_map handling of missing Cartopy dependency. """
 
     def test_no_cartopy_returns_none(self, tmp_path: Path) -> None:
         """
@@ -842,7 +804,7 @@ class TestVisualizerCartopyMissing:
 
 
 class TestVisualizerGenerateAllPlotsException:
-    """Lines 418-419: exception in plot_fss_vs_leadtime during generate_all_plots."""
+    """ Tests for generate_all_plots handling of exceptions in plot_fss_vs_leadtime. """
 
     def test_exception_counted(self, tmp_path: Path) -> None:
         """

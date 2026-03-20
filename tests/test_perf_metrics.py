@@ -36,7 +36,7 @@ def pm() -> PerfMetrics:
 
 
 class TestBinaryMask:
-    """Tests for generate_binary_mask verifying threshold exceedance logic, NaN propagation, and support for both xarray and NumPy inputs."""
+    """ Tests for generate_binary_mask verifying threshold exceedance logic, NaN propagation, and support for both xarray and NumPy inputs. These tests confirm that the binary mask correctly classifies values based on the specified threshold, preserves NaN values without misclassification, and accepts raw NumPy arrays while returning xarray DataArrays for consistent downstream processing in the FSS pipeline. """
 
     def test_simple(self, pm: PerfMetrics) -> None:
         """
@@ -86,7 +86,7 @@ class TestBinaryMask:
 
 
 class TestFractionalField:
-    """Tests for compute_fractional_field verifying neighborhood-averaged fraction values for uniform fields and correct NaN propagation through the sliding window."""
+    """ Tests for compute_fractional_field verifying neighborhood-averaged fraction values for uniform fields and correct NaN propagation through the sliding window. """
 
     def test_uniform_field(self, pm: PerfMetrics) -> None:
         """
@@ -121,7 +121,7 @@ class TestFractionalField:
 
 
 class TestFSS:
-    """Tests for calculate_fss verifying the FSS value bounds and the perfect-forecast degenerate case using synthetic 2D spatial fields."""
+    """ Tests for calculate_fss verifying the FSS value bounds and the perfect-forecast degenerate case using synthetic 2D spatial fields. These tests confirm that the FSS calculation correctly identifies perfect forecasts, respects the upper bound of 1.0, and handles uncorrelated fields without exceeding the maximum score. By using random fields with known properties, we can validate the mathematical correctness of the FSS implementation across a range of realistic verification scenarios. """
 
     def test_perfect_forecast(self, pm: PerfMetrics) -> None:
         """
@@ -158,7 +158,7 @@ class TestFSS:
 
 
 class TestRMSE:
-    """Tests for the PerfMetrics.rmse static method verifying zero-error and known-value cases."""
+    """ Tests for the PerfMetrics.rmse static method verifying zero-error and known-value cases. These tests confirm that the RMSE calculation correctly identifies perfect forecasts, handles simple known-value scenarios, and does not introduce numerical bias or floating-point drift. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the RMSE implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_zero_error(self) -> None:
         """
@@ -183,7 +183,7 @@ class TestRMSE:
 
 
 class TestBias:
-    """Tests for the PerfMetrics.bias static method verifying zero-bias and positive-bias cases."""
+    """ Tests for the PerfMetrics.bias static method verifying zero-bias and positive-bias cases. These tests confirm that the bias calculation correctly identifies perfect forecasts, handles simple known-value scenarios, and does not introduce numerical bias or floating-point drift. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the bias implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_no_bias(self) -> None:
         """
@@ -207,13 +207,8 @@ class TestBias:
         assert PerfMetrics.bias(fcst, obs) == pytest.approx(1.0)
 
 
-# ======================================================================
-# Contingency table
-# ======================================================================
-
-
 class TestContingencyTable:
-    """Tests for compute_contingency_table verifying correct hit/miss/false-alarm/correct-negative counts and NaN exclusion from all categories."""
+    """ Tests for compute_contingency_table verifying correct hit/miss/false-alarm/correct-negative counts and NaN exclusion from all categories. These tests confirm that the contingency table calculation correctly identifies hits, misses, false alarms, and correct negatives, handles simple known-value scenarios, and excludes NaNs from all categories. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the contingency table implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_known_counts(self) -> None:
         """
@@ -280,13 +275,8 @@ class TestContingencyTable:
         assert table["total"] == 3
 
 
-# ======================================================================
-# Individual contingency-table metrics
-# ======================================================================
-
-
 class TestPOD:
-    """Tests for the PerfMetrics.pod static method verifying perfect-detection, partial-detection, and zero-denominator edge cases."""
+    """ Tests for the PerfMetrics.pod static method verifying perfect-detection, partial-detection, and zero-denominator edge cases. These tests confirm that the POD calculation correctly identifies perfect forecasts, handles partial detection scenarios, and gracefully handles cases with no observed events. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the POD implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_perfect(self) -> None:
         """
@@ -314,7 +304,7 @@ class TestPOD:
 
 
 class TestFAR:
-    """Tests for the PerfMetrics.far static method verifying zero-false-alarm, partial, and zero-denominator cases."""
+    """ Tests for the PerfMetrics.far static method verifying zero-false-alarm, partial, and zero-denominator cases. These tests confirm that the FAR calculation correctly identifies perfect forecasts, handles partial false alarm scenarios, and gracefully handles cases with no forecast events. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the FAR implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_no_false_alarms(self) -> None:
         """
@@ -339,7 +329,7 @@ class TestFAR:
 
 
 class TestCSI:
-    """Tests for the PerfMetrics.csi static method covering perfect, partial, and zero-denominator cases, plus the TS alias."""
+    """ Tests for the PerfMetrics.csi static method covering perfect, partial, and zero-denominator cases, plus the TS alias. These tests confirm that the CSI calculation correctly identifies perfect forecasts, handles partial detection scenarios, and gracefully handles cases with no events. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the CSI implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_perfect(self) -> None:
         """
@@ -370,7 +360,7 @@ class TestCSI:
 
 
 class TestFBIAS:
-    """Tests for the PerfMetrics.fbias static method verifying unbiased, over-forecasting, under-forecasting, and zero-denominator cases."""
+    """ Tests for the PerfMetrics.fbias static method verifying unbiased, over-forecasting, under-forecasting, and zero-denominator cases. These tests confirm that the FBIAS calculation correctly identifies perfect frequency bias, handles over- and under-forecasting scenarios, and gracefully handles cases with no observed events. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the FBIAS implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_unbiased(self) -> None:
         """
@@ -411,7 +401,7 @@ class TestFBIAS:
 
 
 class TestETS:
-    """Tests for the PerfMetrics.ets static method verifying perfect-forecast, no-skill, and edge cases."""
+    """ Tests for the PerfMetrics.ets static method verifying perfect-forecast, no-skill, and edge cases. These tests confirm that the ETS calculation correctly identifies perfect forecasts, handles no-skill scenarios, and gracefully handles edge cases. By using small arrays with hand-verifiable expected results, we can validate the mathematical correctness of the ETS implementation for both ideal and non-ideal forecast-observation pairs. """
 
     def test_perfect(self) -> None:
         """
@@ -458,13 +448,8 @@ class TestETS:
         assert math.isnan(PerfMetrics.ets(table))
 
 
-# ======================================================================
-# Batch metrics integration
-# ======================================================================
-
-
 class TestBatchMetrics:
-    """Tests for the separate batch helpers for FSS and contingency metrics."""
+    """ Tests for compute_fss_batch and compute_contingency_batch verifying correct output structure and expected metric values for perfect-forecast scenarios. These tests confirm that the batch computation methods return dictionaries with the correct keys and that the computed metrics match expected values when forecast and observation fields are identical. By using synthetic 2D fields with known properties, we can validate the correctness of the batch processing logic and ensure that the per-threshold outputs are structured as intended for downstream analysis. """
 
     def test_fss_batch_returns_fss_only(self, pm: PerfMetrics) -> None:
         """
@@ -514,13 +499,8 @@ class TestBatchMetrics:
         assert metrics["ets"] == pytest.approx(1.0)
 
 
-# -----------------------------------------------------------------------
-# PerfMetrics gap-closing tests
-# -----------------------------------------------------------------------
-
-
 class TestPerfMetricsNumpyBranches:
-    """Cover numpy array branches and save_intermediate paths."""
+    """ Tests for PerfMetrics methods that exercise the NumPy input branches of compute_fractional_field and calculate_fss. These tests confirm that raw NumPy arrays can be passed directly to these methods without manual wrapping, and that the output types and values are consistent with the expected behavior of the internal DataArray conversion. By using synthetic 2D fields with known properties, we can validate that the NumPy input paths correctly convert to DataArrays and produce valid outputs for downstream FSS computation. """
 
     @pytest.fixture()
     def pm(self) -> PerfMetrics:

@@ -494,7 +494,7 @@ class PerfMetrics:
         save_intermediate: bool = False,
     ) -> Dict[float, Dict[str, float]]:
         """
-        Compute contingency-table metrics for every percentile threshold. These metrics are derived from binary exceedance masks and are independent of neighbourhood window size. Results are returned as a dictionary keyed by ``threshold`` mapping to a metrics dictionary.
+        This method computes contingency-table metrics (POD, FAR, CSI, FBIAS, ETS) for each specified percentile threshold. Binary masks are generated once per threshold and reused across all metrics, avoiding redundant percentile and masking work. The results are returned as a dictionary keyed by threshold mapping to a dictionary of the computed metrics.
 
         Parameters:
             forecast_da (xr.DataArray): Co-located, masked forecast precipitation field.

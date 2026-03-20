@@ -27,10 +27,6 @@ from modvx.config import ModvxConfig
 from modvx.task_manager import TaskManager
 
 
-# -----------------------------------------------------------------------
-# Fixtures
-# -----------------------------------------------------------------------
-
 @pytest.fixture
 def tmp_cfg(tmp_path: Path) -> ModvxConfig:
     """
@@ -56,12 +52,8 @@ def tmp_cfg(tmp_path: Path) -> ModvxConfig:
     )
 
 
-# -----------------------------------------------------------------------
-# _setup_logging
-# -----------------------------------------------------------------------
-
 class TestTaskManagerLogging:
-    """Tests for TaskManager._setup_logging."""
+    """ Tests for TaskManager._setup_logging verifying verbose flag behavior and log file creation. These tests confirm that the logging configuration correctly sets the root logger level based on the verbose flag and that log files are created when enabled. By using temporary directories and minimal configurations, we can validate the logging setup without affecting the real filesystem. """
 
     def test_verbose_sets_debug(self, tmp_cfg: ModvxConfig) -> None:
         """
@@ -88,12 +80,8 @@ class TestTaskManagerLogging:
         assert len(log_files) >= 1
 
 
-# -----------------------------------------------------------------------
-# build_work_units
-# -----------------------------------------------------------------------
-
 class TestBuildWorkUnits:
-    """Tests for TaskManager.build_work_units."""
+    """ Tests for TaskManager.build_work_units verifying correct unit count, required keys, and domain filtering. These tests confirm that the method produces the expected number of work units based on the configured cycles and domains, that each unit contains the necessary keys for execution, and that domain filtering is respected. By using minimal configurations and temporary directories, we can validate the work unit generation logic without relying on real data or filesystem state. """
 
     def test_correct_count(self, tmp_cfg: ModvxConfig) -> None:
         """
@@ -147,12 +135,8 @@ class TestBuildWorkUnits:
         assert all(u["region_name"] == "GLOBAL" for u in units)
 
 
-# -----------------------------------------------------------------------
-# execute_work_unit
-# -----------------------------------------------------------------------
-
 class TestExecuteWorkUnit:
-    """Tests for TaskManager.execute_work_unit with mocked I/O."""
+    """ Tests for TaskManager.execute_work_unit verifying successful execution, error handling, and I/O interactions. These tests use mocked dependencies to isolate the execution logic, ensuring that work units are processed correctly, errors are handled gracefully, and results are saved as expected. """
 
     def test_successful_execution(self, tmp_cfg: ModvxConfig) -> None:
         """
@@ -177,8 +161,8 @@ class TestExecuteWorkUnit:
         obs = fcst.copy()
 
         with patch.object(tm.file_manager, "load_region_mask", return_value=(mock_mask, "mask")), \
-             patch.object(tm.file_manager, "accumulate_forecasts", return_value=fcst), \
-             patch.object(tm.file_manager, "accumulate_observations", return_value=obs), \
+             patch.object(tm.file_manager, "accumulate_forecasts_precip_accum", return_value=fcst), \
+             patch.object(tm.file_manager, "accumulate_observations_precip_accum", return_value=obs), \
              patch.object(tm.data_validator, "prepare", return_value=(fcst, obs)), \
              patch.object(tm.file_manager, "save_fss_results") as mock_save_fss, \
              patch.object(tm.file_manager, "save_contingency_results") as mock_save_cont:
@@ -208,7 +192,7 @@ class TestExecuteWorkUnit:
         )
 
         with patch.object(tm.file_manager, "load_region_mask", return_value=(mock_mask, "mask")), \
-             patch.object(tm.file_manager, "accumulate_forecasts", side_effect=FileNotFoundError), \
+             patch.object(tm.file_manager, "accumulate_forecasts_precip_accum", side_effect=FileNotFoundError), \
              patch.object(tm.file_manager, "save_fss_results") as mock_save_fss, \
              patch.object(tm.file_manager, "save_contingency_results") as mock_save_cont:
 
@@ -245,8 +229,8 @@ class TestExecuteWorkUnit:
         obs = fcst.copy()
 
         with patch.object(tm.file_manager, "load_region_mask", return_value=(mock_mask, "mask")), \
-             patch.object(tm.file_manager, "accumulate_forecasts", return_value=fcst), \
-             patch.object(tm.file_manager, "accumulate_observations", return_value=obs), \
+             patch.object(tm.file_manager, "accumulate_forecasts_precip_accum", return_value=fcst), \
+             patch.object(tm.file_manager, "accumulate_observations_precip_accum", return_value=obs), \
              patch.object(tm.data_validator, "prepare", return_value=(fcst, obs)), \
              patch.object(tm.file_manager, "save_intermediate_precip") as mock_precip, \
              patch.object(tm.file_manager, "save_fss_results"), \
@@ -261,12 +245,8 @@ class TestExecuteWorkUnit:
             assert mock_precip.call_count > 0
 
 
-# -----------------------------------------------------------------------
-# run (serial convenience method)
-# -----------------------------------------------------------------------
-
 class TestTaskManagerRun:
-    """Tests for TaskManager.run serial execution path."""
+    """ Tests for TaskManager.run serial execution path verifying that each work unit is executed exactly once. These tests confirm that the run method correctly iterates over all work units produced by build_work_units and calls execute_work_unit for each one, ensuring complete and accurate processing of the pipeline. """
 
     def test_run_calls_execute(self, tmp_cfg: ModvxConfig) -> None:
         """
@@ -279,3 +259,102 @@ class TestTaskManagerRun:
         with patch.object(tm, "execute_work_unit") as mock_exec:
             tm.run()
             assert mock_exec.call_count == 2  # 2 cycles × 1 domain
+
+
+class TestPrecipAccumValidation:
+    """ Tests for precip_accum_hours validation in TaskManager.__init__ verifying correct handling of multiples and default values. These tests confirm that the constructor raises appropriate errors when precip_accum_hours is not a multiple of forecast_step_hours or observation_interval_hours, and that the default value passes validation. """
+
+    def test_valid_multiple_passes(self, tmp_path: Path) -> None:
+        """precip_accum_hours=3 with forecast_step_hours=1 and obs_interval=1 should pass."""
+        cfg = ModvxConfig(
+            base_dir=str(tmp_path),
+            forecast_step_hours=1,
+            observation_interval_hours=1,
+            precip_accum_hours=3,
+            vxdomain=["GLOBAL"],
+            thresholds=[90.0],
+            window_sizes=[3],
+        )
+        TaskManager(cfg) 
+
+    def test_invalid_step_multiple_raises(self, tmp_path: Path) -> None:
+        """precip_accum_hours=5 with forecast_step_hours=3 should raise ValueError."""
+        cfg = ModvxConfig(
+            base_dir=str(tmp_path),
+            forecast_step_hours=3,
+            observation_interval_hours=1,
+            precip_accum_hours=5,
+            vxdomain=["GLOBAL"],
+            thresholds=[90.0],
+            window_sizes=[3],
+        )
+        with pytest.raises(ValueError, match="multiple of forecast_step_hours"):
+            TaskManager(cfg)
+
+    def test_invalid_obs_multiple_raises(self, tmp_path: Path) -> None:
+        """precip_accum_hours=5 with observation_interval_hours=2 should raise ValueError."""
+        cfg = ModvxConfig(
+            base_dir=str(tmp_path),
+            forecast_step_hours=1,
+            observation_interval_hours=2,
+            precip_accum_hours=5,
+            vxdomain=["GLOBAL"],
+            thresholds=[90.0],
+            window_sizes=[3],
+        )
+        with pytest.raises(ValueError, match="multiple of observation_interval_hours"):
+            TaskManager(cfg)
+
+    def test_zero_default_passes(self, tmp_cfg: ModvxConfig) -> None:
+        """precip_accum_hours=0 (default) should always pass validation."""
+        TaskManager(tmp_cfg)  
+
+
+class TestPrecipAccumStride:
+    """ Tests verifying that valid-time iteration uses precip_accum as stride. These tests confirm that the TaskManager correctly calculates the number of valid times based on the forecast length and precip_accum_hours, ensuring that the stride is applied consistently across all cycles and domains. """
+
+    def test_stride_uses_precip_accum(self, tmp_path: Path) -> None:
+        """With forecast_length=6h, step=1h, precip_accum=3h, expect 2 valid times."""
+        cfg = ModvxConfig(
+            base_dir=str(tmp_path),
+            experiment_name="test_exp",
+            initial_cycle_start=datetime.datetime(2024, 9, 17, 0, 0),
+            final_cycle_start=datetime.datetime(2024, 9, 17, 0, 0),
+            cycle_interval_hours=24,
+            forecast_length_hours=6,
+            forecast_step_hours=1,
+            precip_accum_hours=3,
+            vxdomain=["GLOBAL"],
+            thresholds=[90.0],
+            window_sizes=[3],
+        )
+        tm = TaskManager(cfg)
+
+        mock_mask = xr.DataArray(
+            np.ones((5, 5)),
+            dims=["latitude", "longitude"],
+            coords={"latitude": np.arange(5), "longitude": np.arange(5)},
+        )
+        fcst = xr.DataArray(
+            np.random.rand(5, 5),
+            dims=["latitude", "longitude"],
+            coords={"latitude": np.arange(5), "longitude": np.arange(5)},
+        )
+        obs = fcst.copy()
+
+        with patch.object(tm.file_manager, "load_region_mask", return_value=(mock_mask, "mask")), \
+             patch.object(tm.file_manager, "accumulate_forecasts_precip_accum", return_value=fcst) as mock_fcst, \
+             patch.object(tm.file_manager, "accumulate_observations_precip_accum", return_value=obs) as mock_obs, \
+             patch.object(tm.data_validator, "prepare", return_value=(fcst, obs)), \
+             patch.object(tm.file_manager, "save_fss_results"), \
+             patch.object(tm.file_manager, "save_contingency_results"):
+
+            unit = {
+                "cycle_start": datetime.datetime(2024, 9, 17, 0, 0),
+                "region_name": "GLOBAL",
+                "mask_path": "G004_GLOBAL.nc",
+            }
+            tm.execute_work_unit(unit)
+            # 6h / 3h stride = 2 valid times
+            assert mock_fcst.call_count == 2
+            assert mock_obs.call_count == 2

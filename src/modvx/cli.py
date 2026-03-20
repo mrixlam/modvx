@@ -103,6 +103,11 @@ def build_run_subparser(sub: argparse._SubParsersAction) -> None:
     # Set the forecast length in hours (e.g., 48) for each cycle.
     p.add_argument("--forecast-length", dest="forecast_length_hours", type=int, default=None)
 
+    # Set the precipitation accumulation period in hours (e.g., 3 for 3h accumulated precip)
+    p.add_argument("--precip-accum", dest="precip_accum_hours", type=int, default=None,
+                   help="Precipitation accumulation period in hours (e.g. 3 for 3h accum). "
+                   "Default: same as forecast-step.")
+
     # Set the target resolution to remap MPAS forecasts
     p.add_argument("--target-resolution", dest="target_resolution", type=str, default=None)
 
@@ -487,6 +492,7 @@ def resolve_config_from_namespace(args: argparse.Namespace) -> ModvxConfig:
         "observation_interval_hours",
         "cycle_interval_hours",
         "forecast_length_hours",
+        "precip_accum_hours",
         "verbose",
         "save_intermediate",
         "enable_logs",
