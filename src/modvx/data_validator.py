@@ -3,7 +3,7 @@
 """
 Grid preparation and data validation for MODvx.
 
-This module defines the DataValidator class, which is responsible for preparing the MPAS grid and validating the integrity of forecast and observation data before verification. The validator ensures that the grid is properly loaded and remapped to a regular lat-lon structure, checks for the presence of required variables in the input datasets, and performs any necessary preprocessing steps to align the data with the expectations of the verification algorithms. By centralizing these validation and preparation tasks, we can catch potential issues early in the workflow and ensure that downstream components receive clean, well-structured data for analysis. The DataValidator also serves as a single point of maintenance for any future changes to data handling or grid preparation logic.
+This module contains the DataValidator class, which is responsible for preparing forecast and observation fields for co-located, masked verification arrays. The preparation steps include standardizing observation coordinates, computing the geographic extent of the verification domain mask, clipping observations to a buffered extent around the domain, regridding both forecast and observation to a common target grid, and applying the verification-domain mask to ensure that only in-domain points are included in the final arrays used for verification metrics computation. The DataValidator class is designed to be flexible and configurable via the ModvxConfig object, allowing users to specify target resolutions, buffer sizes, and other parameters that influence how the data is processed. By centralizing all data preparation logic within this class, we ensure that the forecast and observation fields are consistently processed and ready for accurate skill score calculations in the PerfMetrics class. 
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -26,14 +26,19 @@ logger = logging.getLogger(__name__)
 
 
 class DataValidator:
-    """
-    Prepare forecast and observation fields for co-located, masked verification arrays. This class encapsulates every preprocessing step between raw loaded data and the analysis-ready arrays expected by PerfMetrics. Processing steps include coordinate standardisation, longitude normalisation, mask-extent calculation, observation clipping, regridding to a common grid, and verification-mask application. All behaviour is governed by the provided ModvxConfig instance.
+    """ Prepare forecast and observation fields for co-located, masked verification arrays. """
 
-    Parameters:
-        config (ModvxConfig): Run configuration with target resolution, clip buffer size, and verbosity settings.
-    """
+    def __init__(self: "DataValidator", 
+                 config: ModvxConfig) -> None:
+        """ 
+        This class is responsible for preparing forecast and observation fields for co-located, masked verification arrays. The preparation steps include standardizing observation coordinates, computing the geographic extent of the verification domain mask, clipping observations to a buffered extent around the domain, regridding both forecast and observation to a common target grid, and applying the verification-domain mask to ensure that only in-domain points are included in the final arrays used for verification metrics computation. The DataValidator class is designed to be flexible and configurable via the ModvxConfig object, allowing users to specify target resolutions, buffer sizes, and other parameters that influence how the data is processed. By centralizing all data preparation logic within this class, we ensure that the forecast and observation fields are consistently processed and ready for accurate skill score calculations in the PerfMetrics class. 
 
-    def __init__(self, config: ModvxConfig) -> None:
+        Parameters:
+            config (ModvxConfig): Run configuration with target resolution, clip buffer size, and verbosity settings.
+
+        Returns:
+            None
+        """
         # Specify the configuration for data validation and preparation. 
         self.config = config
 
@@ -41,7 +46,7 @@ class DataValidator:
     @staticmethod
     def standardize_observation_coordinates(obs: xr.DataArray) -> xr.DataArray:
         """
-        Standardise the coordinate names and longitude convention of an observation DataArray. Input observation files may use abbreviated dimension names (``lat``/``lon``) and arbitrary longitude conventions. This method applies standardize_coords to rename dimensions to ``latitude``/``longitude`` and then converts longitudes to the [0, 360] convention required by the clipping and regridding steps that follow. It is always the first step applied to raw observation data in the processing pipeline.
+        This static method standardizes the coordinate names and longitude convention of the input observation DataArray. It first uses the standardize_coords utility function to rename any non-standard latitude and longitude coordinate names to "latitude" and "longitude", ensuring consistent processing in subsequent steps. Then, it applies the normalize_longitude function to convert longitudes to the [0, 360] convention, which is commonly used in meteorological datasets and ensures compatibility with the verification domain masks and regridding operations. The resulting standardized observation DataArray is returned for further processing in the data preparation pipeline. 
 
         Parameters:
             obs (xr.DataArray): Raw observation DataArray with potentially non-standard coordinate names.
@@ -60,20 +65,15 @@ class DataValidator:
 
 
     @staticmethod
-    def compute_mask_extent(
-        region_mask: xr.DataArray,
-    ) -> Tuple[float, float, float, float]:
+    def compute_mask_extent(region_mask: xr.DataArray,) -> Tuple[float, float, float, float]:
         """
-        Compute the geographic bounding box of active (non-zero) points in a region mask. The bounding box is determined by finding the latitude and longitude coordinates that contain at least one active mask cell, then taking the min and max of each axis. The result is used to clip the observation field to the region of interest before regridding, reducing unnecessary computation. A ValueError is raised when the mask contains no active points, indicating a misconfigured or incompatible mask file.
+        This static method computes the geographic extent of the verification domain mask by identifying the minimum and maximum latitude and longitude values that encompass all active (non-zero) grid points in the mask. It creates boolean arrays to determine which rows and columns of the mask contain active points, then extracts the corresponding latitude and longitude coordinates. If no active points are found in the mask, a ValueError is raised to indicate that there are no valid points in the verification domain. The computed bounding box is returned as a tuple of (lat_min, lat_max, lon_min, lon_max) in degrees, which is used in subsequent steps to clip observations and define the target grid for regridding. 
 
         Parameters:
             region_mask (xr.DataArray): Binary verification-domain mask with ``latitude``/``longitude`` coordinates.
 
         Returns:
             Tuple[float, float, float, float]: Bounding box as ``(lat_min, lat_max, lon_min, lon_max)`` in degrees.
-
-        Raises:
-            ValueError: If the mask contains no active (non-zero) grid points.
         """
         # Create a boolean array where True indicates active mask points (values > 0). 
         active_mask = region_mask.values > 0
@@ -102,16 +102,14 @@ class DataValidator:
         return lat_min, lat_max, lon_min, lon_max
 
 
-    def clip_observation_to_buffer(
-        self,
-        obs: xr.DataArray,
-        lat_min: float,
-        lat_max: float,
-        lon_min: float,
-        lon_max: float,
-    ) -> xr.DataArray:
+    def clip_observation_to_buffer(self: "DataValidator",
+                                   obs: xr.DataArray,
+                                   lat_min: float,
+                                   lat_max: float,
+                                   lon_min: float,
+                                   lon_max: float,) -> xr.DataArray:
         """
-        Clip an observation DataArray to the verification domain extent with an added buffer. A configurable buffer (default 1°, set via ModvxConfig.clip_buffer_deg) is added on all sides of the bounding box before slicing, ensuring that the subsequent regridding step has sufficient data near domain edges to produce accurate interpolated values. Latitude and longitude bounds are clamped to valid geographic ranges ([-90, 90] and [0, 360]). This significantly reduces data volume for regional domain verification.
+        This method clips the observation DataArray to a buffered extent around the verification domain defined by the input latitude and longitude bounds. The buffer size in degrees is retrieved from the configuration (``clip_buffer_deg``) and applied to expand the clipping bounds in all directions. The method ensures that the buffered bounds do not exceed valid geographic limits (i.e., latitudes between -90 and 90 degrees, longitudes between 0 and 360 degrees). The resulting clipped observation DataArray is returned for further processing, such as regridding and masking. This clipping step helps to reduce the computational load of subsequent operations by limiting the observation data to a region that encompasses the verification domain with a reasonable margin. 
 
         Parameters:
             obs (xr.DataArray): Global or large-domain observation DataArray with standard coordinate names.
@@ -144,17 +142,15 @@ class DataValidator:
 
 
     @staticmethod
-    def regrid_to_common_grid(
-        fcst: xr.DataArray,
-        obs_clipped: xr.DataArray,
-        target_resolution: Union[str, float],
-        lat_min: float,
-        lat_max: float,
-        lon_min: float,
-        lon_max: float,
-    ) -> Tuple[xr.DataArray, xr.DataArray]:
+    def regrid_to_common_grid(fcst: xr.DataArray,
+                              obs_clipped: xr.DataArray,
+                              target_resolution: Union[str, float],
+                              lat_min: float,
+                              lat_max: float,
+                              lon_min: float,
+                              lon_max: float,) -> Tuple[xr.DataArray, xr.DataArray]:
         """
-        Regrid forecast and observation arrays to a common regular lat-lon grid. Three target resolution modes are supported: ``"obs"`` interpolates the forecast to match the observation grid; ``"fcst"`` interpolates the observation to the forecast grid; and a floating-point value creates a new regular grid at that degree spacing covering the domain bounds. Linear interpolation is used for floating-point targets. The returned arrays share identical coordinates.
+        This static method regrids both the forecast and clipped observation DataArrays to a common target grid defined by the specified target resolution and geographic bounds. The target resolution can be specified as "obs" to interpolate the forecast to the observation grid, "fcst" to interpolate the observation to the forecast grid, or as a float value representing the degree spacing for a new regular lat-lon grid. For the "obs" and "fcst" cases, xarray's interp_like method is used for interpolation. For a custom float resolution, new latitude and longitude arrays are created based on the provided bounds and resolution, and both forecast and observation are interpolated to this new grid using linear interpolation. The resulting regridded forecast and observation DataArrays are returned on the common target grid for subsequent masking and verification metric calculations. 
 
         Parameters:
             fcst (xr.DataArray): Forecast precipitation field on its native grid.
@@ -194,18 +190,16 @@ class DataValidator:
 
 
     @staticmethod
-    def apply_domain_mask(
-        fcst: xr.DataArray,
-        obs: xr.DataArray,
-        region_mask: xr.DataArray,
-        target_resolution: Union[str, float],
-        lat_min: float,
-        lat_max: float,
-        lon_min: float,
-        lon_max: float,
-    ) -> Tuple[xr.DataArray, xr.DataArray]:
+    def apply_domain_mask(fcst: xr.DataArray,
+                          obs: xr.DataArray,
+                          region_mask: xr.DataArray,
+                          target_resolution: Union[str, float],
+                          lat_min: float,
+                          lat_max: float,
+                          lon_min: float,
+                          lon_max: float,) -> Tuple[xr.DataArray, xr.DataArray]:
         """
-        Apply a binary verification-domain mask to forecast and observation arrays. Grid points outside the mask (where mask value ≤ 0.5 after interpolation) are set to NaN in both arrays. The mask is first resampled to the data grid via nearest-neighbour interpolation so that its resolution matches the target grid. This ensures that FSS computations only include grid points within the intended verification domain and out-of-domain points do not dilute the skill score.
+        This static method applies the verification-domain mask to both the forecast and observation DataArrays on the common target grid. If the target resolution is "obs" or "fcst", the region mask is resampled to the corresponding grid using nearest-neighbour interpolation. For a custom float resolution, the mask is first resampled to the new regular grid defined by the provided bounds and resolution. A boolean mask is created where True indicates points inside the verification domain (mask value > 0.5). This boolean mask is then applied to both forecast and observation DataArrays using xarray's where method, setting out-of-domain points to NaN. The method logs the number of valid points remaining in both forecast and observation after masking for debugging purposes. Finally, the masked forecast and observation DataArrays are returned for use in verification metrics computation.
 
         Parameters:
             fcst (xr.DataArray): Regridded forecast array on the common target grid.
@@ -253,15 +247,13 @@ class DataValidator:
         return forecast_masked, observation_masked
 
 
-    def prepare(
-        self,
-        forecast_accum: xr.DataArray,
-        observation_accum: xr.DataArray,
-        region_mask: xr.DataArray,
-        valid_time: datetime.datetime,
-    ) -> Tuple[xr.DataArray, xr.DataArray]:
+    def prepare(self: "DataValidator",
+                forecast_accum: xr.DataArray,
+                observation_accum: xr.DataArray,
+                region_mask: xr.DataArray,
+                valid_time: datetime.datetime,) -> Tuple[xr.DataArray, xr.DataArray]:
         """
-        Execute the complete data preparation pipeline for a single valid time. Processing steps are applied in sequence: coordinate standardisation, mask-extent computation, observation clipping, regridding to the target resolution, and verification-mask application. A shape assertion is performed after masking to guarantee that forecast and observation arrays are co-located on the same grid before being passed to PerfMetrics.
+        This method orchestrates the full preparation of forecast and observation DataArrays for verification. It first computes the geographic extent of the verification domain mask, then standardizes the observation coordinates and longitude convention. Next, it clips the observation to a buffered extent around the domain to reduce data volume for subsequent steps. Both forecast and observation are then regridded to a common target grid defined by the configuration. Finally, the verification-domain mask is applied to both arrays to ensure that only in-domain points are included in the final arrays used for verification metrics computation. The method logs key steps and counts of valid points at each stage for debugging purposes, and returns the fully prepared forecast and observation DataArrays ready for skill score calculations. 
 
         Parameters:
             forecast_accum (xr.DataArray): Accumulated forecast precipitation field on its native grid.

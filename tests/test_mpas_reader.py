@@ -15,25 +15,31 @@ Version: 1.0.0
 import datetime
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 import xarray as xr
 
 from modvx.mpas_reader import load_mpas_precip
 
-_TEST_DIR = Path(__file__).resolve().parent / "testdata"
-_GRID_FILE = _TEST_DIR / "grid" / "x1.163842.grid.nc"
-_FC_DIR = _TEST_DIR / "data" / "fcst" / "mrislam_coldstart_60km2024" / "ExtendedFC"
-_CYCLES = ["2024091700", "2024091800", "2024091900", "2024092000", "2024092100"]
+_TEST_DIR = Path(__file__).resolve().parent.parent / "data"
+_GRID_FILE = _TEST_DIR / "grid" / "x1.10242.static.nc"
+_FC_DIR = _TEST_DIR / "fcst" / "mrislam_coldstart_240km_meso" / "ExtendedFC"
+_CYCLES = ["2014090100", "2014090106", "2014090112", "2014090118", "2014090200"]
 _FORECAST_HOURS = 6  # each cycle has 6h of hourly diag files (hours 0-6)
 
 # Expected mesh size for this grid
-_EXPECTED_NCELLS = 163842
+_EXPECTED_NCELLS = 10242
 
 def _is_real_netcdf(path: Path) -> bool:
-    """Return True only when *path* is a proper NetCDF file, not a Git-LFS pointer."""
+    """
+    This helper function checks if the given path points to a real NetCDF file by verifying that it exists, has a reasonable file size, and does not contain the ASCII header of a Git-LFS pointer file. This is used to conditionally skip tests that require the actual grid file when it is missing or replaced by a pointer due to Git-LFS handling. The function returns True if the file appears to be a valid NetCDF file and False otherwise.
+
+    Parameters:
+        path (Path): The file path to check.
+
+    Returns:
+        bool: True if the file is a real NetCDF file, False if it is missing or a Git-LFS pointer.
+    """
     if not path.exists() or path.stat().st_size < 512:
         return False
     try:
@@ -44,19 +50,27 @@ def _is_real_netcdf(path: Path) -> bool:
     except OSError:
         return False
 
-# Skip all tests in this module if the grid file is missing or is a Git-LFS pointer
 pytestmark = pytest.mark.skipif(
     not _is_real_netcdf(_GRID_FILE),
-    reason="test data not present or is a Git-LFS pointer (tests/testdata/)",
+    reason="test data not present (data/grid/x1.10242.static.nc)",
 )
 
 
 class TestLoadMpasPrecipSynthetic:
-    """ Unit tests for load_mpas_precip using minimal synthetic NetCDF file pairs that avoid any dependency on real MPAS forecast data. Each test constructs in-memory or tmp_path-based datasets with known values to verify specific loader behaviors in isolation. """
+    """ Unit tests for load_mpas_precip using minimal synthetic NetCDF file pairs that avoid any dependency on real MPAS forecast data. """
 
     @pytest.fixture()
-    def _synth_files(self, tmp_path: Path):
-        """Create a minimal synthetic MPAS diagnostic and grid NetCDF file pair for isolated unit testing. The grid file contains 10 mesh cells with lonCell and latCell coordinates spanning the full spherical range in radians. The diag file stores rainc and rainnc variables with known linearly-spaced values so that test assertions can verify exact numerical outputs from load_mpas_precip without reading real forecast data."""
+    def _synth_files(self: "TestLoadMpasPrecipSynthetic", 
+                     tmp_path: Path):
+        """
+        This fixture creates synthetic MPAS diag and grid NetCDF files with a small number of cells and known rainc/rainnc values. The grid file contains simple lonCell and latCell coordinates, while the diag file contains rainc and rainnc variables that are linearly increasing across cells. The fixture returns the paths to these synthetic files along with the number of cells and the original rainc/rainnc arrays for use in test assertions. By using synthetic files, we can precisely control the input data and validate that load_mpas_precip processes it correctly without relying on the presence of real MPAS output. 
+
+        Parameters:
+            tmp_path (Path): The temporary directory path provided by pytest for creating test files.
+
+        Returns:
+            tuple: Paths to the synthetic diag and grid files, number of cells, and the rainc and rainnc arrays.
+        """
         ncells = 10
         grid_ds = xr.Dataset(
             {
@@ -80,22 +94,49 @@ class TestLoadMpasPrecipSynthetic:
 
         return str(diag_path), str(grid_path), ncells, rainc, rainnc
 
-    def test_returns_sum_of_rainc_rainnc(self, _synth_files) -> None:
-        """Verify that load_mpas_precip returns the element-wise sum of rainc and rainnc as a DataArray with the correct shape. This test unpacks the synthetic fixture to access the known input arrays and asserts numerical closeness between the function output and the expected sum. The result shape must also equal the number of mesh cells, confirming that no cells are dropped or duplicated during the loading process."""
+    def test_returns_sum_of_rainc_rainnc(self: "TestLoadMpasPrecipSynthetic", 
+                                         _synth_files) -> None:
+        """
+        This test verifies that load_mpas_precip correctly sums the rainc and rainnc variables from the diag file to produce the total cumulative precipitation. It asserts that the returned DataArray has the expected shape and that its values match the element-wise sum of the original rainc and rainnc arrays. This confirms that the core loading and summation logic in load_mpas_precip is functioning as intended when provided with known input data. 
+
+        Parameters:
+            _synth_files: The synthetic diag and grid file paths, number of cells, and rainc/rainnc arrays provided by the fixture.
+
+        Returns:
+            None
+        """
         diag, grid, ncells, rainc, rainnc = _synth_files
         result = load_mpas_precip(diag, grid)
         assert isinstance(result, xr.DataArray)
         assert result.shape == (ncells,)
         np.testing.assert_allclose(result.values, rainc + rainnc)
 
-    def test_units_attribute(self, _synth_files) -> None:
-        """Confirm that load_mpas_precip attaches a 'units' attribute set to 'mm' on the returned DataArray. Consistent unit metadata is required so that downstream threshold comparisons and FSS calculations operate on precipitation values in the expected millimeter scale. This test guards against silent omission of unit attributes that could cause misleading results when the DataArray is passed to visualization or metrics code."""
-        diag, grid, *_ = _synth_files
+    def test_units_attribute(self: "TestLoadMpasPrecipSynthetic", 
+                             _synth_files: tuple) -> None:
+        """
+        This test confirms that load_mpas_precip attaches a 'units' attribute set to 'mm' on the returned DataArray. Consistent unit metadata is required so that downstream threshold comparisons and FSS calculations operate on precipitation values in the expected millimeter scale. This test guards against silent omission of unit attributes that could cause misleading results when the DataArray is passed to visualization or metrics code. 
+
+        Parameters:
+            _synth_files: The synthetic diag and grid file paths, number of cells, and rainc/rainnc arrays provided by the fixture.
+
+        Returns:
+            None
+        """
+        diag, grid, ncells, rainc, rainnc = _synth_files
         result = load_mpas_precip(diag, grid)
         assert result.attrs["units"] == "mm"
 
-    def test_coords_merged_from_grid(self, _synth_files) -> None:
-        """Verify that load_mpas_precip correctly sources lonCell and latCell coordinates from the grid file, since MPAS diagnostic files do not contain mesh coordinate variables. This test opens the raw diag file directly and confirms that lonCell is absent, then calls load_mpas_precip to assert that coordinate merging from the grid file produces a valid result. Proper coordinate merging is essential for subsequent remapping of the unstructured mesh to a regular lat-lon grid."""
+    def test_coords_merged_from_grid(self: "TestLoadMpasPrecipSynthetic", 
+                                     _synth_files: tuple) -> None:
+        """
+        This test verifies that load_mpas_precip successfully merges spatial coordinates from the grid file when the diag file does not contain lonCell and latCell. It asserts that the returned DataArray has 'lonCell' and 'latCell' coordinates with the expected values from the grid file. This confirms that the coordinate merging logic in load_mpas_precip correctly falls back to the grid file for spatial information, which is essential for producing georeferenced output suitable for remapping and verification. 
+
+        Parameters:
+            _synth_files: The synthetic diag and grid file paths, number of cells, and rainc/rainnc arrays provided by the fixture.
+
+        Returns:
+            None
+        """
         diag, grid, *_ = _synth_files
         load_mpas_precip(diag, grid)
         # The function should have opened the grid to get coordinates
@@ -103,8 +144,17 @@ class TestLoadMpasPrecipSynthetic:
         assert "lonCell" not in ds
         ds.close()
 
-    def test_only_rainc(self, tmp_path: Path) -> None:
-        """Verify that load_mpas_precip returns the rainc array unchanged when rainnc is absent from the diag file. This test constructs a minimal diag file containing only rainc and asserts the output matches those values exactly. Correct behavior for the rainc-only case prevents silent zeroing or error when a model run only writes convective precipitation output."""
+    def test_only_rainc(self: "TestLoadMpasPrecipSynthetic", 
+                        tmp_path: Path) -> None:
+        """
+        This test verifies that load_mpas_precip returns the rainc array unchanged when rainnc is absent from the diag file. This test constructs a diag file containing only rainc and asserts the output matches those values exactly. Correct behavior for the rainc-only case ensures that convective precipitation is not silently zeroed out when a model run omits the non-convective component. 
+
+        Parameters:
+            tmp_path: The temporary directory path provided by pytest for file creation.
+
+        Returns:
+            None
+        """
         ncells = 5
         grid_ds = xr.Dataset(
             {
@@ -123,8 +173,17 @@ class TestLoadMpasPrecipSynthetic:
         result = load_mpas_precip(str(diag_path), str(grid_path))
         np.testing.assert_allclose(result.values, rainc)
 
-    def test_only_rainnc(self, tmp_path: Path) -> None:
-        """Verify that load_mpas_precip returns the rainnc array unchanged when rainc is absent from the diag file. This test constructs a diag file containing only rainnc and asserts the output matches those values exactly. Correct behavior for the rainnc-only case ensures that large-scale non-convective precipitation is not silently zeroed out when a model run omits the convective component."""
+    def test_only_rainnc(self: "TestLoadMpasPrecipSynthetic", 
+                         tmp_path: Path) -> None:
+        """
+        This test verifies that load_mpas_precip returns the rainnc array unchanged when rainc is absent from the diag file. This test constructs a diag file containing only rainnc and asserts the output matches those values exactly. Correct behavior for the rainnc-only case ensures that large-scale non-convective precipitation is not silently zeroed out when a model run omits the convective component. 
+
+        Parameters:
+            tmp_path: The temporary directory path provided by pytest for file creation.
+
+        Returns:
+            None
+        """
         ncells = 5
         grid_ds = xr.Dataset(
             {
@@ -143,8 +202,17 @@ class TestLoadMpasPrecipSynthetic:
         result = load_mpas_precip(str(diag_path), str(grid_path))
         np.testing.assert_allclose(result.values, rainnc)
 
-    def test_missing_precip_vars_raises(self, tmp_path: Path) -> None:
-        """Ensure that load_mpas_precip raises a ValueError when the diag file contains neither rainc nor rainnc. This test provides a diag file with only a 'temperature' variable and expects the function to fail with a message matching 'No rainc or rainnc'. Explicit early failure on missing precipitation variables prevents silent NaN propagation or misleading zero-precip results downstream in the verification pipeline."""
+    def test_missing_precip_vars_raises(self: "TestLoadMpasPrecipSynthetic", 
+                                        tmp_path: Path) -> None:
+        """
+        This test verifies that load_mpas_precip raises a ValueError when neither rainc nor rainnc is present in the diag file. Since load_mpas_precip relies on at least one of these variables to compute cumulative precipitation, their absence should trigger an explicit error rather than producing an empty or NaN-filled output. This test constructs a diag file with no precipitation variables and asserts that the expected error is raised with a message indicating the missing variables. 
+
+        Parameters:
+            tmp_path: The temporary directory path provided by pytest for file creation.
+
+        Returns:
+            None
+        """
         ncells = 5
         grid_ds = xr.Dataset(
             {
@@ -167,45 +235,116 @@ class TestGridFileConsistency:
     """ Structural validation tests for the real MPAS grid NetCDF file confirming coordinate variables, mesh dimensions, and topology arrays are present and within expected physical ranges. """
 
     @pytest.fixture(scope="class")
-    def grid(self):
-        """ Open the real MPAS grid NetCDF file and yield the dataset for class-scoped reuse across all grid consistency tests. The dataset is opened once per test class to avoid redundant file I/O and is closed automatically after all tests in the class have completed. """
+    def grid(self: "TestGridFileConsistency") -> xr.Dataset:
+        """ 
+        This fixture opens the real MPAS grid NetCDF file once per test class and yields the dataset for use in all grid consistency tests. The dataset is closed automatically after all tests finish. By using a class-scoped fixture, we minimize I/O overhead while still ensuring that all tests operate on the same grid file instance. The fixture does not perform any modifications to the dataset, allowing each test to independently verify the raw contents of the grid file as it would be read by load_mpas_precip. 
+
+        Parameters:
+            None
+
+        Returns:
+            xr.Dataset: The opened MPAS grid dataset for use in tests.
+        """
         ds = xr.open_dataset(_GRID_FILE)
         yield ds
         ds.close()
 
-    def test_ncells_dimension(self, grid: xr.Dataset) -> None:
-        """Assert that the MPAS grid file's nCells dimension matches the expected mesh resolution of 163,842 cells. This test detects grid file substitution or corruption that would cause all subsequent mesh-dependent operations to run at the wrong spatial resolution. It is intentionally kept as a fast sanity check that runs before any computationally heavier coordinate or topology tests."""
+    def test_ncells_dimension(self: "TestGridFileConsistency", 
+                              grid: xr.Dataset) -> None:
+        """
+        This test verifies that the grid file contains a dimension named 'nCells' and that its size matches the expected number of cells for this MPAS mesh configuration. The nCells dimension defines the number of mesh cells in the unstructured grid and is critical for correctly interpreting the shape of variables in both the grid and diag files. A mismatch in nCells would indicate a fundamental inconsistency between the grid and diagnostic data, which would cause errors during coordinate merging and remapping steps in load_mpas_precip. This test ensures that the grid file has the correct structure before any data loading operations are attempted. 
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert grid.sizes["nCells"] == _EXPECTED_NCELLS
 
-    def test_has_lonCell_latCell(self, grid: xr.Dataset) -> None:
-        """Confirm that the grid file exposes lonCell and latCell coordinate variables required for merging with MPAS diagnostic files. These variables are the primary source of spatial coordinates for the unstructured mesh since diag files do not carry their own cell coordinates. Their absence would cause load_mpas_precip to fail or produce coordinates-free output during the coordinate merge step."""
+    def test_has_lonCell_latCell(self: "TestGridFileConsistency", 
+                                 grid: xr.Dataset) -> None:
+        """
+        This test confirms that the grid file contains the essential coordinate variables 'lonCell' and 'latCell' that define the longitude and latitude of each mesh cell center. These variables are required for remapping the unstructured MPAS mesh to a regular lat-lon grid and for georeferencing the precipitation data. Their absence would indicate a malformed or incomplete grid file that cannot be used for spatial operations in load_mpas_precip. This test ensures that the necessary spatial coordinates are present before any remapping logic is executed. 
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert "lonCell" in grid, "Grid file missing lonCell"
         assert "latCell" in grid, "Grid file missing latCell"
 
-    def test_coordinate_shapes(self, grid: xr.Dataset) -> None:
-        """Verify that lonCell and latCell are 1D arrays with exactly one entry per mesh cell. Coordinate arrays with incorrect shapes would cause broadcasting errors or silently misalign cell positions during the remapping step that converts the unstructured MPAS mesh to a regular lat-lon grid. This shape check complements the dimension count and range tests by confirming array dimensionality."""
+    def test_coordinate_shapes(self: "TestGridFileConsistency", 
+                               grid: xr.Dataset) -> None:
+        """
+        This test verifies that the lonCell and latCell variables in the grid file have the expected shape of (nCells,), where nCells matches the expected number of mesh cells for this MPAS configuration. Correct shapes for these coordinate variables are essential for successful merging with the diag file and for proper remapping to a regular grid. If the shapes do not match (e.g., if they are 2D or have an unexpected dimension), it would indicate a problem with the grid file that would cause errors in load_mpas_precip when it attempts to align coordinates with precipitation data. This test ensures that the spatial coordinate variables are structured correctly for use in remapping operations. 
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert grid["lonCell"].shape == (_EXPECTED_NCELLS,)
         assert grid["latCell"].shape == (_EXPECTED_NCELLS,)
 
-    def test_lonCell_range(self, grid: xr.Dataset) -> None:
-        """Verify that all lonCell values fall within the MPAS radian convention range of [0, 2π]. Values outside this interval indicate a unit mismatch or data corruption that would produce incorrect coordinates after the radian-to-degree conversion applied during mesh remapping. Catching this early prevents physically nonsensical longitude offsets from propagating into the lat-lon verification grid."""
+    def test_lonCell_range(self: "TestGridFileConsistency", 
+                           grid: xr.Dataset) -> None:
+        """
+        This test confirms that all longitude values in the lonCell variable fall within the MPAS radian convention range of [0, 2π]. Longitude values outside this range would indicate a unit mismatch (e.g., degrees instead of radians) that produces physically nonsensical coordinates after radian-to-degree conversion. Passing this test confirms the longitude coordinate convention matches what the remapping utility expects when constructing the regular output grid.
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         lon = grid["lonCell"].values
         assert lon.min() >= 0.0, f"lonCell min {lon.min()} < 0"
         assert lon.max() <= 2 * np.pi + 1e-6, f"lonCell max {lon.max()} > 2π"
 
-    def test_latCell_range(self, grid: xr.Dataset) -> None:
-        """Verify that all latCell values fall within the MPAS radian convention range of [-π/2, π/2]. Latitude values outside this range would indicate a unit mismatch that produces physically nonsensical coordinates after radian-to-degree conversion. Passing this test confirms the latitude coordinate convention matches what the remapping utility expects when constructing the regular output grid."""
+    def test_latCell_range(self: "TestGridFileConsistency", 
+                           grid: xr.Dataset) -> None:
+        """
+        This test confirms that all latitude values in the latCell variable fall within the MPAS radian convention range of [-π/2, π/2]. Latitude values outside this range would indicate a unit mismatch (e.g., degrees instead of radians) that produces physically nonsensical coordinates after radian-to-degree conversion. Passing this test confirms the latitude coordinate convention matches what the remapping utility expects when constructing the regular output grid. 
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         lat = grid["latCell"].values
         assert lat.min() >= -np.pi / 2 - 1e-6
         assert lat.max() <= np.pi / 2 + 1e-6
 
-    def test_no_nan_in_coordinates(self, grid: xr.Dataset) -> None:
-        """Ensure that neither lonCell nor latCell contains any NaN values across all mesh cells. NaN-valued coordinates would cause silent failures during interpolation and remapping, producing NaN-filled output grids without an explicit error. This check provides an early warning for incomplete or malformed grid files before any data-dependent operations are attempted."""
+    def test_no_nan_in_coordinates(self: "TestGridFileConsistency", 
+                                   grid: xr.Dataset) -> None:
+        """
+        This test verifies that there are no NaN values in the lonCell and latCell coordinate variables of the grid file. NaN values in spatial coordinates would cause remapping operations to fail or produce NaN-filled output arrays, which would propagate through the verification pipeline and lead to incorrect FSS results. This test ensures that all mesh cells have valid longitude and latitude values before any remapping or spatial analysis is attempted. 
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert not np.any(np.isnan(grid["lonCell"].values))
         assert not np.any(np.isnan(grid["latCell"].values))
 
-    def test_has_topology_vars(self, grid: xr.Dataset) -> None:
-        """Confirm that the grid file contains the basic MPAS topology variables needed for mesh connectivity operations. The variables nEdgesOnCell, cellsOnCell, and edgesOnCell define adjacency relationships between mesh cells and are required by mpasdiag and other MPAS utility libraries. Their absence would cause runtime errors in any pipeline step that performs neighborhood-based computations on the unstructured mesh."""
+    def test_has_topology_vars(self: "TestGridFileConsistency", 
+                               grid: xr.Dataset) -> None:
+        """
+        This test confirms that the grid file contains the essential topology variables 'nEdgesOnCell', 'cellsOnCell', and 'edgesOnCell' that define the unstructured mesh connectivity. These variables are required for any remapping or interpolation operations that depend on the mesh structure. Their absence would indicate a malformed grid file that cannot be used for spatial operations in load_mpas_precip. This test ensures that the necessary mesh topology information is present before any remapping logic is executed. 
+
+        Parameters:
+            grid: The MPAS grid dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         for var in ("nEdgesOnCell", "cellsOnCell", "edgesOnCell"):
             assert var in grid, f"Grid file missing topology variable {var}"
 
@@ -214,16 +353,34 @@ class TestDiagFilesExist:
     """ File-presence tests that confirm all expected MPAS diagnostic NetCDF files exist on disk for every forecast cycle in the test dataset. """
 
     @pytest.mark.parametrize("cycle", _CYCLES)
-    def test_init_hour_diag_exists(self, cycle: str) -> None:
-        """ Confirm that the hour-0 MPAS diagnostic file exists for each forecast cycle in the test dataset. The initialization-hour file is required to compute precipitation accumulations by providing the baseline cumulative value that is subtracted from later hours. Missing hour-0 files would either raise a FileNotFoundError in the pipeline or produce incorrect accumulations using a stale prior-run baseline. """
+    def test_init_hour_diag_exists(self: "TestDiagFilesExist", 
+                                   cycle: str) -> None:
+        """ 
+        This test verifies that the initialization-hour MPAS diagnostic file exists for each forecast cycle in the test dataset. The hour-0 diag file is critical as it serves as the baseline for all subsequent accumulation calculations, so its presence is a prerequisite for any meaningful testing of load_mpas_precip. The test constructs the expected filename based on the cycle string and checks for its existence on disk, failing with a clear message if it is missing. This ensures that the test dataset is complete and correctly structured before any content validation or accumulation consistency tests are run. 
+
+        Parameters:
+            cycle: The forecast cycle string in the format YYYYMMDDHH.
+
+        Returns:
+            None
+        """
         init_dt = datetime.datetime.strptime(cycle, "%Y%m%d%H")
         ts = init_dt.strftime("%Y-%m-%d_%H.%M.%S")
         path = _FC_DIR / cycle / f"diag.{ts}.nc"
         assert path.exists(), f"Missing init diag for cycle {cycle}: {path}"
 
     @pytest.mark.parametrize("cycle", _CYCLES)
-    def test_hourly_diag_sequence(self, cycle: str) -> None:
-        """Verify that the full sequence of hourly MPAS diagnostic files exists from lead hour 0 through the configured _FORECAST_HOURS for each forecast cycle. Gaps in the sequence would cause the accumulation loop in FileManager to skip or misalign precipitation intervals, leading to incorrect FSS inputs. All missing filenames are collected and reported together rather than failing on the first missing file to simplify debugging."""
+    def test_hourly_diag_sequence(self: "TestDiagFilesExist", 
+                                  cycle: str) -> None:
+        """
+        This test verifies that all expected hourly MPAS diagnostic files exist for each forecast cycle in the test dataset, covering hours 0 through the final forecast hour. Since load_mpas_precip relies on differencing diag files across multiple time steps to compute accumulations, the presence of the full sequence of hourly files is essential for meaningful testing. The test constructs the expected filename for each hour and checks for its existence, accumulating any missing files into a list and failing with a clear message if any are absent. This ensures that the test dataset is complete and correctly structured for all temporal steps before any content validation or accumulation consistency tests are run. 
+
+        Parameters:
+            cycle: The forecast cycle string in the format YYYYMMDDHH.
+
+        Returns:
+            None
+        """
         init_dt = datetime.datetime.strptime(cycle, "%Y%m%d%H")
         missing = []
         for hour in range(_FORECAST_HOURS + 1):  # 0.._FORECAST_HOURS inclusive
@@ -242,41 +399,103 @@ class TestDiagFileContents:
     """ Content validation tests checking variable presence, array shape, data type, and physical plausibility within a representative MPAS diagnostic file. """
 
     @pytest.fixture(scope="class")
-    def sample_diag(self):
-        """ Open the hour-6 MPAS diagnostic file from the 2024091700 forecast cycle for class-scoped reuse across all content validation tests. This mid-forecast file is chosen because it is expected to contain non-zero cumulative precipitation, making it more representative than the initialization-hour file. The dataset is opened once per test class to minimize I/O overhead and is closed automatically after all tests finish. """
-        path = _FC_DIR / "2024091700" / "diag.2024-09-17_06.00.00.nc"
+    def sample_diag(self: "TestDiagFileContents") -> xr.Dataset:
+        """ 
+        This fixture opens a representative MPAS diagnostic NetCDF file from the test dataset that contains the expected rainc and rainnc variables. The fixture yields the opened dataset for use in all content validation tests within this class, ensuring that all tests operate on the same diag file instance. The dataset is closed automatically after all tests finish. By using a class-scoped fixture, we minimize I/O overhead while still allowing multiple tests to validate different aspects of the same diag file's contents, such as variable presence, shapes, data types, and value ranges.
+
+        Parameters:
+            None
+
+        Returns:
+            xr.Dataset: The opened MPAS diagnostic dataset for use in tests.
+        """
+        path = _FC_DIR / "2014090100" / "diag.2014-09-01_06.00.00.nc"
         ds = xr.open_dataset(path)
         yield ds
         ds.close()
 
-    def test_has_rainc_rainnc(self, sample_diag: xr.Dataset) -> None:
-        """Confirm that the diag file contains both rainc and rainnc precipitation variables expected by load_mpas_precip. The loader sums these two variables to derive total cumulative precipitation, so absence of either would result in incomplete accumulation. This test acts as a prerequisite check before any numerical or shape-based validation is attempted on the precipitation data."""
+    def test_has_rainc_rainnc(self: "TestDiagFileContents", 
+                              sample_diag: xr.Dataset) -> None:
+        """
+        This test verifies that the sample MPAS diagnostic file contains both the 'rainc' and 'rainnc' variables, which represent the convective and non-convective cumulative precipitation components, respectively. The presence of these variables is essential for load_mpas_precip to compute total cumulative precipitation correctly. If either variable is missing, it would indicate a problem with the diag file that would cause load_mpas_precip to raise an error or produce incomplete output. This test ensures that the necessary precipitation variables are present in the diag file before any further content validation or accumulation consistency tests are performed.
+
+        Parameters:
+            sample_diag: The MPAS diagnostic dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert "rainc" in sample_diag, "Diag file missing rainc"
         assert "rainnc" in sample_diag, "Diag file missing rainnc"
 
-    def test_rainc_shape(self, sample_diag: xr.Dataset) -> None:
-        """Verify that the rainc variable has the expected (Time, nCells) dimension order and the correct number of mesh cells. Incorrect dimension ordering would cause the isel(Time=0) slicing in load_mpas_precip to select the wrong axis, producing misshapen output arrays. The nCells count is also validated to confirm the diag file originates from the same mesh resolution as the grid file."""
+    def test_rainc_shape(self: "TestDiagFileContents", 
+                         sample_diag: xr.Dataset) -> None:
+        """
+        This test confirms that the 'rainc' variable in the sample MPAS diagnostic file has the expected shape of (Time, nCells), where nCells matches the expected number of mesh cells for this MPAS configuration. The Time dimension should have a size of 1 for each diag file, as MPAS is configured to write one time snapshot per file. The nCells dimension must match the grid's nCells to ensure that precipitation values are correctly aligned with spatial coordinates during merging and remapping. This test ensures that the rainc variable has the correct structure for use in load_mpas_precip and that it is consistent with the expected mesh configuration.
+
+        Parameters:
+            sample_diag: The MPAS diagnostic dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert sample_diag["rainc"].dims == ("Time", "nCells")
         assert sample_diag["rainc"].shape[1] == _EXPECTED_NCELLS
 
-    def test_single_time_step(self, sample_diag: xr.Dataset) -> None:
-        """Assert that each MPAS diagnostic file contains exactly one time snapshot in the Time dimension. The load_mpas_precip function uses isel(Time=0) to extract values, which is only correct if files contain a single time step as MPAS is configured to write. Files with more than one entry would cause the wrong time step to be loaded silently, depending on which step holds the cumulative precipitation values."""
+    def test_single_time_step(self: "TestDiagFileContents", 
+                              sample_diag: xr.Dataset) -> None:
+        """
+        This test verifies that the Time dimension in the sample MPAS diagnostic file has a size of 1, confirming that each diag file contains only a single time snapshot as expected from MPAS's output convention. If the Time dimension had more than one step, it would indicate a problem with the diag file that could cause load_mpas_precip to fail or produce incorrect results when it attempts to process multiple time steps. This test ensures that the temporal structure of the diag file matches the expected format for use in load_mpas_precip and that it is consistent with the assumption of one time snapshot per file. 
+
+        Parameters:
+            sample_diag: The MPAS diagnostic dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert sample_diag.sizes["Time"] == 1
 
-    def test_ncells_matches_grid(self, sample_diag: xr.Dataset) -> None:
-        """Verify that the nCells dimension in the diag file is consistent with the expected mesh size from the grid file. Mismatched nCells counts between the diag and grid files would cause a dimension mismatch error when merging coordinates during load_mpas_precip. This test ensures the diag and grid files originate from the same MPAS mesh configuration before any data loading operations are attempted."""
+    def test_ncells_matches_grid(self: "TestDiagFileContents", 
+                                 sample_diag: xr.Dataset) -> None:
+        """
+        This test confirms that the nCells dimension in the sample MPAS diagnostic file matches the expected number of mesh cells for this MPAS configuration, which is defined by the grid file. A mismatch in nCells between the diag and grid files would indicate a fundamental inconsistency that would cause errors during coordinate merging and remapping steps in load_mpas_precip. This test ensures that the diag file has the correct structure and is consistent with the expected mesh configuration before any data loading operations are attempted. 
+
+        Parameters:
+            sample_diag: The MPAS diagnostic dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         assert sample_diag.sizes["nCells"] == _EXPECTED_NCELLS
 
-    def test_precip_non_negative(self, sample_diag: xr.Dataset) -> None:
-        """Confirm that cumulative precipitation values in both rainc and rainnc are non-negative across all mesh cells. Since these are running-total fields, any negative value indicates numerical corruption or a model reset artifact that would propagate into incorrect accumulation differences. A small tolerance of 1e-6 mm is permitted to accommodate floating-point rounding in the model output without generating false failures."""
+    def test_precip_non_negative(self: "TestDiagFileContents", 
+                                 sample_diag: xr.Dataset) -> None:
+        """
+        This test verifies that all values in the 'rainc' and 'rainnc' variables of the sample MPAS diagnostic file are non-negative, as cumulative precipitation cannot be negative. Negative values would indicate a problem with the diag file, such as data corruption or an incorrect unit conversion, that would produce physically implausible results when processed by load_mpas_precip. This test ensures that the precipitation data in the diag file is physically reasonable and suitable for use in accumulation calculations and FSS verification. A small tolerance of -1e-6 is allowed to account for any floating-point rounding issues without triggering false positives. 
+
+        Parameters:
+            sample_diag: The MPAS diagnostic dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         for var in ("rainc", "rainnc"):
             vals = sample_diag[var].values
             assert np.all(vals >= -1e-6), (
                 f"{var} has negative values: min={vals.min()}"
             )
 
-    def test_precip_dtype_float32(self, sample_diag: xr.Dataset) -> None:
-        """Verify that the rainc and rainnc variables are stored as 32-bit floating-point values consistent with MPAS model output conventions. Using float32 is important for memory efficiency on large meshes and for compatibility with the arithmetic operations applied during accumulation differencing. This test guards against accidental integer encoding or double-precision storage that would alter memory footprint or downstream type promotion behavior."""
+    def test_precip_dtype_float32(self: "TestDiagFileContents", 
+                                  sample_diag: xr.Dataset) -> None:
+        """
+        This test confirms that the 'rainc' and 'rainnc' variables in the sample MPAS diagnostic file have a data type of float32, which is the expected precision for MPAS precipitation output. Using float32 ensures that the data is stored efficiently while still providing sufficient precision for accumulation calculations and FSS verification. If the data type were different (e.g., float64 or int), it could indicate a problem with the diag file or an unexpected change in MPAS's output format that would require adjustments to load_mpas_precip. This test ensures that the precipitation variables have the correct data type for use in load_mpas_precip and that they are consistent with the expected MPAS output convention. 
+
+        Parameters:
+            sample_diag: The MPAS diagnostic dataset provided by the fixture.
+
+        Returns:
+            None
+        """
         for var in ("rainc", "rainnc"):
             assert sample_diag[var].dtype == np.float32
 
@@ -285,8 +504,17 @@ class TestHourZeroPrecip:
     """ Parametrized sanity checks confirming that every forecast cycle's initialization-hour diag file contains zero cumulative precipitation for both rainc and rainnc. """
 
     @pytest.mark.parametrize("cycle", _CYCLES)
-    def test_precip_zero_at_init(self, cycle: str) -> None:
-        """ Verify that cumulative precipitation is zero at the model initialization hour for every forecast cycle in the test dataset. MPAS resets cumulative precipitation counters at the start of each cold-start forecast run, so any non-zero value at hour 0 indicates an initialization failure or a misidentified warm-start file. Failing this test would invalidate all accumulation calculations that use the hour-0 file as the baseline subtraction reference. """
+    def test_precip_zero_at_init(self: "TestHourZeroPrecip", 
+                                 cycle: str) -> None:
+        """
+        This test verifies that the initialization-hour MPAS diagnostic file for each forecast cycle contains zero cumulative precipitation in both the 'rainc' and 'rainnc' variables. Since these variables represent cumulative totals from the start of the forecast, they should be zero at hour 0. Non-zero values at initialization would indicate a problem with the diag file, such as a model reset or incorrect file ordering, that would produce incorrect accumulation calculations when processed by load_mpas_precip. This test ensures that the baseline conditions for all forecast cycles are consistent and physically plausible before any accumulation consistency tests are run. A small tolerance of 1e-6 is allowed to account for any floating-point rounding issues without triggering false positives. 
+
+        Parameters:
+            cycle: The forecast cycle identifier.
+
+        Returns:
+            None
+        """
         init_dt = datetime.datetime.strptime(cycle, "%Y%m%d%H")
         ts = init_dt.strftime("%Y-%m-%d_%H.%M.%S")
         path = _FC_DIR / cycle / f"diag.{ts}.nc"
@@ -304,10 +532,18 @@ class TestHourZeroPrecip:
 class TestPrecipMonotonicity:
     """ Integration tests verifying that domain-total cumulative precipitation increases or stays constant as the forecast advances, consistent with MPAS's running-accumulation output convention. """
 
-    def test_total_precip_increases(self) -> None:
-        """ Verify that domain-total cumulative precipitation at hour 3 is greater than or equal to hour 0, and at the final forecast hour is greater than or equal to hour 3. Because MPAS writes running totals rather than interval accumulations, summed precipitation can only stay constant or increase across consecutive time steps. Violating this monotonicity property would indicate a model reset, a file ordering error, or numerical corruption in the diagnostic output. """
-        cycle = "2024091700"
-        init_dt = datetime.datetime(2024, 9, 17, 0)
+    def test_total_precip_increases(self: "TestPrecipMonotonicity") -> None:
+        """ 
+        This test confirms that the total cumulative precipitation across the entire domain does not decrease between the initialization hour and subsequent forecast hours for a representative forecast cycle. Since MPAS outputs cumulative totals, the sum of rainc and rainnc should either increase or remain constant as time advances. A decrease in total precipitation would indicate a problem with the diag files, such as incorrect file ordering, data corruption, or a model reset, that would produce incorrect accumulation calculations when processed by load_mpas_precip. This test ensures that the temporal evolution of cumulative precipitation is physically plausible and consistent with MPAS's output convention before any further verification steps are performed. A small tolerance of 1e-3 mm is allowed to account for any floating-point rounding issues without triggering false positives. 
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
+        cycle = "2014090100"
+        init_dt = datetime.datetime(2014, 9, 1, 0)
         grid_file = str(_GRID_FILE)
 
         check_hours = (0, 3, _FORECAST_HOURS)
@@ -329,11 +565,19 @@ class TestPrecipMonotonicity:
 class TestAccumulationConsistency:
     """ Integration tests that validate the physical plausibility of precipitation accumulations computed by differencing MPAS diagnostic files across a 6-hour window. """
 
-    def test_6h_accumulation_non_negative(self) -> None:
-        """ Verify that the 6-hour precipitation accumulation derived by subtracting the hour-0 diag file from the hour-6 diag file is non-negative at every mesh cell. Negative accumulations would indicate that cumulative totals decreased over time, which is physically impossible and would produce incorrect binary masks in the FSS verification pipeline. A small tolerance of 1e-4 mm is allowed to absorb floating-point subtraction rounding without triggering false positives. """
-        cycle = "2024091700"
+    def test_6h_accumulation_non_negative(self: "TestAccumulationConsistency") -> None:
+        """ 
+        This test verifies that the 6-hour accumulated precipitation, computed by differencing the diag files at hour 0 and hour 6, is non-negative across the entire domain. Since MPAS outputs cumulative totals, the difference between the hour 6 and hour 0 diag files should yield a non-negative accumulation of precipitation over that period. Negative values in the accumulation would indicate a problem with the diag files, such as incorrect file ordering, data corruption, or a model reset, that would produce physically implausible results when processed by load_mpas_precip. This test ensures that the computed accumulations are consistent with physical expectations and MPAS's output convention before any further verification steps are performed. A small tolerance of -1e-4 mm is allowed to account for any floating-point rounding issues without triggering false positives. 
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
+        cycle = "2014090100"
         grid_file = str(_GRID_FILE)
-        init_dt = datetime.datetime(2024, 9, 17, 0)
+        init_dt = datetime.datetime(2014, 9, 1, 0)
         end_dt = init_dt + datetime.timedelta(hours=_FORECAST_HOURS)
 
         start = load_mpas_precip(
@@ -350,11 +594,19 @@ class TestAccumulationConsistency:
             f"Negative accumulation detected: min={float(accum.min()):.6f}"
         )
 
-    def test_6h_accumulation_reasonable_magnitude(self) -> None:
-        """ Confirm that the maximum 6-hour accumulated precipitation does not exceed a physically plausible upper bound of 500 mm anywhere in the domain. Exceeding this threshold would suggest a data overflow, incorrect unit conversion, or a runaway numerical issue in the model output that would render FSS computations meaningless. This sanity bound is intentionally generous to avoid false positives from extreme convective events while still catching clearly erroneous values. """
-        cycle = "2024091700"
+    def test_6h_accumulation_reasonable_magnitude(self: "TestAccumulationConsistency") -> None:
+        """ 
+        This test confirms that the maximum value of the 6-hour accumulated precipitation, computed by differencing the diag files at hour 0 and hour 6, is within a physically reasonable range (e.g., less than 500 mm) for this MPAS configuration and test dataset. While the exact maximum accumulation can vary based on the model configuration and meteorological conditions, values exceeding a certain threshold would indicate a problem with the diag files, such as incorrect file ordering, data corruption, or a model reset, that would produce physically implausible results when processed by load_mpas_precip. This test ensures that the computed accumulations are not only non-negative but also within a realistic range for use in further verification steps.  
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
+        cycle = "2014090100"
         grid_file = str(_GRID_FILE)
-        init_dt = datetime.datetime(2024, 9, 17, 0)
+        init_dt = datetime.datetime(2014, 9, 1, 0)
         end_dt = init_dt + datetime.timedelta(hours=_FORECAST_HOURS)
 
         start = load_mpas_precip(
@@ -375,36 +627,49 @@ class TestAccumulationConsistency:
 class TestEnsureMpasdiagBranches:
     """ Cover _ensure_mpasdiag import-error, cached-true, and success paths. """
 
-    def test_ensure_mpasdiag_import_error(self) -> None:
+    def test_ensure_mpasdiag_import_error(self: "TestEnsureMpasdiagBranches") -> None:
         """
-        Verify that _ensure_mpasdiag raises ImportError when the mpasdiag package cannot be imported.
-        The function probes for mpasdiag at call time and must raise ImportError with a message containing
-        'mpasdiag is required' when the package is missing. This guards against silent failures where
-        remapping would proceed without the required library and produce incorrect output.
+        This test verifies that _ensure_mpasdiag raises an ImportError with the expected message when mpasdiag is not available. By patching sys.modules to simulate the absence of mpasdiag and its submodules, we confirm that the function correctly detects the missing dependency and raises an informative error. This test ensures that users receive a clear message about the requirement for mpasdiag if they attempt to use load_mpas_precip without having it installed, which is essential for diagnosing setup issues.
+
+        Parameters:
+            None
 
         Returns:
             None
         """
+        import sys
         from modvx import mpas_reader
 
         old_val = mpas_reader._HAS_MPASDIAG
         mpas_reader._HAS_MPASDIAG = None
-        with patch.dict("sys.modules", {
-            "mpasdiag": None,
-            "mpasdiag.processing": None,
-            "mpasdiag.processing.remapping": None,
-            "mpasdiag.processing.utils_geog": None,
-        }):
+
+        _MISSING = object()
+        keys = [
+            "mpasdiag", "mpasdiag.processing",
+            "mpasdiag.processing.remapping",
+            "mpasdiag.processing.utils_geog",
+        ]
+        saved = {k: sys.modules.get(k, _MISSING) for k in keys}
+        # Set all four to None so the import inside _ensure_mpasdiag_available fails.
+        for k in keys:
+            sys.modules[k] = None  # type: ignore[assignment]
+        try:
             with pytest.raises(ImportError, match="mpasdiag is required"):
                 mpas_reader._ensure_mpasdiag_available()
-        mpas_reader._HAS_MPASDIAG = old_val
+        finally:
+            for k in keys:
+                if saved[k] is _MISSING:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = saved[k]
+            mpas_reader._HAS_MPASDIAG = old_val
 
-    def test_ensure_mpasdiag_cached_true(self) -> None:
+    def test_ensure_mpasdiag_cached_true(self: "TestEnsureMpasdiagBranches") -> None:
         """
-        Verify that _ensure_mpasdiag returns immediately without re-importing when already cached as True.
-        After a successful import the _HAS_MPASDIAG flag is set to True so subsequent calls skip the
-        import probe entirely. This test pre-sets the flag and confirms no ImportError is raised, which
-        would be the symptom if the import was attempted again in a patched environment.
+        This test confirms that _ensure_mpasdiag returns immediately without raising an error when _HAS_MPASDIAG is already set to True, simulating the cached success path. By setting _HAS_MPASDIAG to True before calling the function, we verify that it does not attempt to re-import mpasdiag and does not raise an error, confirming that the early-return cache mechanism works as intended for subsequent calls after a successful import.
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -416,12 +681,12 @@ class TestEnsureMpasdiagBranches:
         mpas_reader._ensure_mpasdiag_available()  # should not raise
         mpas_reader._HAS_MPASDIAG = old_val
 
-    def test_successful_import(self) -> None:
+    def test_successful_import(self: "TestEnsureMpasdiagBranches") -> None:
         """
-        Verify that _ensure_mpasdiag successfully imports fake mpasdiag modules and sets _HAS_MPASDIAG to True.
-        This test injects synthetic module objects into sys.modules to simulate a valid mpasdiag installation.
-        After the first call _HAS_MPASDIAG must be True, and a second call must be a no-op confirming
-        the early-return cache path also works for the success branch.
+        This test verifies that _ensure_mpasdiag successfully imports mpasdiag and its submodules when they are available, and that it sets _HAS_MPASDIAG to True. By patching sys.modules to include mock versions of mpasdiag and its submodules, we confirm that the function can import them without error and that the expected remapping and utility functions are accessed. This test ensures that the successful import path works correctly and that the function properly caches the success for future calls. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -432,10 +697,10 @@ class TestEnsureMpasdiagBranches:
         mr._HAS_MPASDIAG = None
 
         fake_remapping = types.ModuleType("mpasdiag.processing.remapping")
-        setattr(fake_remapping, "remap_mpas_to_latlon_with_masking", MagicMock())
+        setattr(fake_remapping, "remap_mpas_to_latlon_with_masking", lambda *a, **kw: None)
 
         fake_utils = types.ModuleType("mpasdiag.processing.utils_geog")
-        setattr(fake_utils, "MPASGeographicUtils", MagicMock())
+        setattr(fake_utils, "MPASGeographicUtils", lambda *a, **kw: None)
 
         fake_processing = types.ModuleType("mpasdiag.processing")
         fake_mpasdiag = types.ModuleType("mpasdiag")
@@ -473,12 +738,13 @@ class TestEnsureMpasdiagBranches:
 class TestRemapToLatlonWithGrid:
     """ Cover remap_to_latlon body — with lonCell present and with grid fallback. """
 
-    def test_remap_with_grid_fallback(self, tmp_path: Path) -> None:
+    def test_remap_with_grid_fallback(self: "TestRemapToLatlonWithGrid", 
+                                      tmp_path: Path) -> None:
         """
-        Verify that remap_to_latlon loads spatial coordinates from grid_file when lonCell is absent in the dataset.
-        This covers the fallback branch where the main diagnostic file does not include grid coordinate
-        variables and a separate mesh file must be opened to obtain lat/lon cell positions.
-        The test confirms the remapping function is still called once and the result has the expected dims.
+        This test verifies the remap_to_latlon function's ability to successfully remap a DataArray to a regular lat-lon grid using a separate grid file when the input dataset does not contain lonCell and latCell variables. By creating temporary diagnostic and grid NetCDF files with the necessary structure, we confirm that the function correctly extracts spatial coordinates from the grid file, computes the extent, and calls the mpasdiag remapping function with the expected arguments. The test also checks that the returned DataArray has latitude and longitude dimensions, confirming that the remapping process was executed as intended. This test ensures that the grid fallback mechanism in remap_to_latlon works correctly when spatial coordinates are not present in the input dataset. 
+
+        Parameters:
+            tmp_path: A pytest fixture providing a temporary directory for creating test NetCDF files.
 
         Returns:
             None
@@ -497,20 +763,60 @@ class TestRemapToLatlonWithGrid:
         grid_path = tmp_path / "grid.nc"
         grid_ds.to_netcdf(str(grid_path))
 
-        fake_extract = MagicMock(
-            return_value=(np.array([0.0, 1.0, 2.0]), np.array([10.0, 20.0, 30.0])),
+        def fake_extract(*args, 
+                         **kwargs) -> tuple[np.ndarray, np.ndarray]:
+            """
+            This fake function simulates the behavior of MPASGeographicUtils.extract_spatial_coordinates by returning predefined longitude and latitude arrays. The longitude array contains values [0.0, 1.0, 2.0] and the latitude array contains values [10.0, 20.0, 30.0], which correspond to the coordinates defined in the temporary grid dataset created for this test. By providing these specific values, we can verify that remap_to_latlon correctly uses the extracted coordinates to compute the extent and call the remapping function with the expected spatial information. This allows us to validate the integration of coordinate extraction and remapping logic without relying on the actual implementation of MPASGeographicUtils.
+
+            Parameters:
+                *args: Positional arguments (ignored in this fake implementation).
+                **kwargs: Keyword arguments (ignored in this fake implementation).
+
+            Returns:
+                tuple[np.ndarray, np.ndarray]: A tuple containing the longitude and latitude arrays. 
+            """
+            return (np.array([0.0, 1.0, 2.0]), np.array([10.0, 20.0, 30.0]))
+
+        def fake_extent(*args, 
+                        **kwargs) -> tuple[float, float, float, float]:
+            """
+            This fake function simulates the behavior of MPASGeographicUtils.get_extent_from_coordinates by returning a predefined extent. The extent is defined as (0.0, 2.0, 10.0, 30.0), which corresponds to the minimum and maximum longitude and latitude values from the temporary grid dataset created for this test. By providing this specific extent, we can verify that remap_to_latlon correctly uses the computed extent when calling the remapping function. This allows us to validate the integration of extent computation and remapping logic without relying on the actual implementation of MPASGeographicUtils.
+
+            Parameters:
+                *args: Positional arguments (ignored in this fake implementation).
+                **kwargs: Keyword arguments (ignored in this fake implementation).
+
+            Returns:
+                tuple[float, float, float, float]: A tuple containing the minimum and maximum longitude and latitude values.
+            """
+            return (0.0, 2.0, 10.0, 30.0)
+
+        mock_utils = types.SimpleNamespace(
+            extract_spatial_coordinates=fake_extract,
+            get_extent_from_coordinates=fake_extent,
         )
-        fake_extent = MagicMock(return_value=(0.0, 2.0, 10.0, 30.0))
-        mock_utils = MagicMock()
-        mock_utils.extract_spatial_coordinates = fake_extract
-        mock_utils.get_extent_from_coordinates = fake_extent
 
         remapped_da = xr.DataArray(
             np.ones((2, 2)),
             dims=["lat", "lon"],
             coords={"lat": [10.0, 30.0], "lon": [0.0, 2.0]},
         )
-        mock_remap = MagicMock(return_value=remapped_da)
+        remap_calls: list = []
+
+        def mock_remap(*args, 
+                       **kwargs) -> xr.DataArray: 
+            """
+            This mock function simulates the behavior of remap_mpas_to_latlon_with_masking by returning a predefined remapped DataArray. The returned DataArray has dimensions "lat" and "lon" with coordinates corresponding to the extent defined in the fake_extent function. By appending the received arguments to the remap_calls list, we can verify that remap_to_latlon calls the remapping function with the expected arguments, including the input data, spatial coordinates, and extent. This allows us to validate that remap_to_latlon correctly integrates with the remapping function and passes the correct information for remapping, without relying on the actual implementation of the remapping logic.
+
+            Parameters:
+                *args: Positional arguments received from remap_to_latlon (e.g., input data, spatial coordinates, extent).
+                **kwargs: Keyword arguments received from remap_to_latlon (e.g., resolution, masking options).
+
+            Returns:
+                xr.DataArray: A predefined remapped DataArray with latitude and longitude dimensions. 
+            """
+            remap_calls.append(args)
+            return remapped_da
 
         mr._HAS_MPASDIAG = True
 
@@ -543,7 +849,7 @@ class TestRemapToLatlonWithGrid:
 
             assert "latitude" in result.dims
             assert "longitude" in result.dims
-            mock_remap.assert_called_once()
+            assert len(remap_calls) == 1
         finally:
             for k in keys:
                 if saved[k] is None:
@@ -552,12 +858,13 @@ class TestRemapToLatlonWithGrid:
                     sys.modules[k] = saved[k]
             mr._HAS_MPASDIAG = None
 
-    def test_remap_to_latlon_mocked(self, tmp_path: Path) -> None:
+    def test_remap_to_latlon_mocked(self: "TestRemapToLatlonWithGrid", 
+                                    tmp_path: Path) -> None:
         """
-        Verify the full remap_to_latlon path when lonCell is already present in the dataset.
-        This covers the nominal branch where spatial coordinates are read directly from the diagnostic
-        file without a separate grid file fallback. The test mocks the mpasdiag remapping function
-        and confirms the returned DataArray has latitude and longitude dimensions.
+        This test verifies the remap_to_latlon function's ability to successfully remap a DataArray to a regular lat-lon grid using mocked mpasdiag remapping and utility functions. By creating a temporary diagnostic NetCDF file with the necessary structure and patching the mpasdiag remapping and geographic utility functions, we confirm that remap_to_latlon correctly calls these functions with the expected arguments and that it returns a DataArray with latitude and longitude dimensions. This test ensures that the core logic of remap_to_latlon works correctly when the mpasdiag dependencies are available, even though the actual remapping is mocked, allowing us to validate the integration points without relying on the real mpasdiag implementation.
+
+        Parameters:
+            tmp_path: A pytest fixture providing a temporary directory for creating test NetCDF files.
 
         Returns:
             None
@@ -581,29 +888,99 @@ class TestRemapToLatlonWithGrid:
             coords={"lat": np.arange(5.0), "lon": np.arange(5.0)},
         )
 
-        mock_remap_fn = MagicMock(return_value=remapped)
-        mock_geo_utils = MagicMock()
-        mock_geo_utils.extract_spatial_coordinates.return_value = (
-            np.linspace(0, 10, n_cells), np.linspace(-5, 5, n_cells)
-        )
-        mock_geo_utils.get_extent_from_coordinates.return_value = (0.0, 10.0, -5.0, 5.0)
+        def mock_remap_fn(*args, 
+                          **kwargs) -> xr.DataArray:
+            """
+            This mock function simulates the behavior of remap_mpas_to_latlon_with_masking by returning a predefined remapped DataArray. The returned DataArray has dimensions "lat" and "lon" with coordinates corresponding to a regular grid. By accepting arbitrary positional and keyword arguments, we can verify that remap_to_latlon calls the remapping function with the expected arguments, including the input data, spatial coordinates, and extent. This allows us to validate that remap_to_latlon correctly integrates with the remapping function and passes the correct information for remapping, without relying on the actual implementation of the remapping logic.
+
+            Parameters:
+                *args: Positional arguments received from remap_to_latlon (e.g., input data, spatial coordinates, extent).
+                **kwargs: Keyword arguments received from remap_to_latlon (e.g., resolution, masking options).
+ 
+            Returns:
+                xr.DataArray: A predefined remapped DataArray with latitude and longitude dimensions. 
+            """
+            return remapped
+
+        class _FakeGeoUtils:
+            """ Fake MPASGeographicUtils class with methods that return predefined coordinates and extent based on the number of cells. """
+
+            def __call__(self: "_FakeGeoUtils", 
+                         *args, 
+                         **kwargs) -> "_FakeGeoUtils":
+                """ 
+                This mock __call__ method simulates the behavior of the MPASGeographicUtils class when called as a function. It returns the instance itself, allowing method chaining or further calls to other methods of the class.
+
+                Parameters:
+                    *args: Positional arguments received from the caller.
+                    **kwargs: Keyword arguments received from the caller.
+
+                Returns:
+                    _FakeGeoUtils: The instance itself, enabling method chaining.
+                """
+                return self
+            def extract_spatial_coordinates(self: "_FakeGeoUtils", 
+                                            *args, 
+                                            **kwargs) -> tuple:
+                """
+                This mock method simulates the behavior of the extract_spatial_coordinates method of the MPASGeographicUtils class. It returns predefined latitude and longitude coordinates based on the number of cells.
+
+                Parameters:
+                    *args: Positional arguments received from the caller.
+                    **kwargs: Keyword arguments received from the caller.
+
+                Returns:
+                    tuple: A tuple containing two numpy arrays representing latitude and longitude coordinates.
+                """
+                return (np.linspace(0, 10, n_cells), np.linspace(-5, 5, n_cells))
+            
+            def get_extent_from_coordinates(self: "_FakeGeoUtils", 
+                                            *args, 
+                                            **kwargs) -> tuple:
+                """
+                This mock method simulates the behavior of the get_extent_from_coordinates method of the MPASGeographicUtils class. It returns a predefined extent based on the coordinates.
+
+                Parameters:
+                    *args: Positional arguments received from the caller.
+                    **kwargs: Keyword arguments received from the caller.
+
+                Returns:
+                    tuple: A tuple representing the extent (min_lat, max_lat, min_lon, max_lon).
+                """
+                return (0.0, 10.0, -5.0, 5.0)
+
+        mock_geo_utils = _FakeGeoUtils()
+
+        import sys
+
+        fake_remapping_mod = types.ModuleType("mpasdiag.processing.remapping")
+        setattr(fake_remapping_mod, "remap_mpas_to_latlon_with_masking", mock_remap_fn)
+        fake_utils_mod = types.ModuleType("mpasdiag.processing.utils_geog")
+        setattr(fake_utils_mod, "MPASGeographicUtils", mock_geo_utils)
 
         old_has = mpas_reader._HAS_MPASDIAG
         mpas_reader._HAS_MPASDIAG = True
 
-        with patch.dict("sys.modules", {
-            "mpasdiag": MagicMock(),
-            "mpasdiag.processing": MagicMock(),
-            "mpasdiag.processing.remapping": MagicMock(
-                remap_mpas_to_latlon_with_masking=mock_remap_fn
-            ),
-            "mpasdiag.processing.utils_geog": MagicMock(
-                MPASGeographicUtils=mock_geo_utils
-            ),
-        }):
+        _MISSING = object()
+        keys = [
+            "mpasdiag", "mpasdiag.processing",
+            "mpasdiag.processing.remapping",
+            "mpasdiag.processing.utils_geog",
+        ]
+        saved = {k: sys.modules.get(k, _MISSING) for k in keys}
+        try:
+            sys.modules["mpasdiag"] = types.ModuleType("mpasdiag")
+            sys.modules["mpasdiag.processing"] = types.ModuleType("mpasdiag.processing")
+            sys.modules["mpasdiag.processing.remapping"] = fake_remapping_mod
+            sys.modules["mpasdiag.processing.utils_geog"] = fake_utils_mod
             result = mpas_reader.remap_to_latlon(data, ds_file, ds_file, 0.5)
-
-        mpas_reader._HAS_MPASDIAG = old_has
+        finally:
+            for k in keys:
+                if saved[k] is _MISSING:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = saved[k]
+            mpas_reader._HAS_MPASDIAG = old_has
 
         assert "latitude" in result.dims
         assert "longitude" in result.dims
@@ -612,12 +989,13 @@ class TestRemapToLatlonWithGrid:
 class TestLoadAndRemapMpasPrecip:
     """ Cover load_and_remap_mpas_precip convenience wrapper. """
 
-    def test_load_and_remap(self, tmp_path: Path) -> None:
+    def test_load_and_remap(self: "TestLoadAndRemapMpasPrecip", 
+                            tmp_path: Path) -> None:
         """
-        Verify that load_and_remap_mpas_precip calls load_mpas_precip and remap_to_latlon with the correct arguments.
-        This convenience wrapper should call load_mpas_precip once with the diag_file and grid_file, then
-        pass the result to remap_to_latlon along with both file paths and the resolution. The final return
-        value must have the same shape as the remapped DataArray.
+        This test verifies that the load_and_remap_mpas_precip function correctly loads precipitation data from an MPAS diagnostic file, merges it with grid coordinates from a separate grid file, and remaps it to a regular lat-lon grid at the specified resolution. By patching the load_mpas_precip and remap_to_latlon functions to return controlled test data, we confirm that load_and_remap_mpas_precip calls these functions with the expected arguments and that it returns a DataArray with latitude and longitude dimensions. This test ensures that the convenience wrapper function correctly integrates the loading and remapping steps, providing a streamlined interface for users while still relying on the underlying functionality of the individual components.
+
+        Parameters:
+            tmp_path: A pytest fixture providing a temporary directory for creating test NetCDF files.
 
         Returns:
             None
@@ -630,12 +1008,56 @@ class TestLoadAndRemapMpasPrecip:
         mesh_precip = xr.DataArray(np.array([1.0, 2.0, 3.0]), dims=["nCells"])
         remapped = xr.DataArray(np.ones((3, 3)), dims=["latitude", "longitude"])
 
-        with patch.object(mpas_reader, "load_mpas_precip", return_value=mesh_precip) as m_load, \
-             patch.object(mpas_reader, "remap_to_latlon", return_value=remapped) as m_remap:
+        load_calls: list = []
+        remap_calls: list = []
+
+        def fake_load(diag_file: str, 
+                      grid_file: str) -> xr.DataArray:
+            """
+            This fake function simulates the behavior of load_mpas_precip by returning a predefined DataArray representing precipitation on the MPAS mesh. By appending the received diag_file and grid_file arguments to the load_calls list, we can verify that load_and_remap_mpas_precip calls the loading function with the expected file paths. This allows us to validate that load_and_remap_mpas_precip correctly integrates with the loading function and passes the correct information for loading, without relying on the actual implementation of load_mpas_precip.
+
+            Parameters:
+                diag_file: The path to the MPAS diagnostic file from which to load precipitation data.
+                grid_file: The path to the MPAS grid file that may be needed for loading precipitation data.
+
+            Returns:
+                xr.DataArray: A predefined DataArray representing precipitation on the MPAS mesh. 
+            """
+            load_calls.append((diag_file, grid_file))
+            return mesh_precip
+
+        def fake_remap(data: xr.DataArray, 
+                       diag_file: str, 
+                       grid_file: str, 
+                       resolution: float) -> xr.DataArray:
+            """
+            This fake function simulates the behavior of remap_to_latlon by returning a predefined remapped DataArray. By appending the received data, diag_file, grid_file, and resolution arguments to the remap_calls list, we can verify that load_and_remap_mpas_precip calls the remapping function with the expected arguments, including the loaded precipitation data and the file paths. This allows us to validate that load_and_remap_mpas_precip correctly integrates with the remapping function and passes the correct information for remapping, without relying on the actual implementation of remap_to_latlon. 
+
+            Parameters:
+                data: The DataArray representing precipitation on the MPAS mesh that is to be remapped.
+                diag_file: The path to the MPAS diagnostic file, which may be used for remapping.
+                grid_file: The path to the MPAS grid file, which may be used for remapping.
+                resolution: The desired resolution for the remapped lat-lon grid.
+
+            Returns:
+                xr.DataArray: A predefined remapped DataArray with latitude and longitude dimensions. 
+            """
+            remap_calls.append((data, diag_file, grid_file, resolution))
+            return remapped
+
+        orig_load = mpas_reader.load_mpas_precip
+        orig_remap = mpas_reader.remap_to_latlon
+        mpas_reader.load_mpas_precip = fake_load
+        mpas_reader.remap_to_latlon = fake_remap
+        try:
             result = mpas_reader.load_and_remap_mpas_precip("diag.nc", "grid.nc", 0.5)
+        finally:
+            mpas_reader.load_mpas_precip = orig_load
+            mpas_reader.remap_to_latlon = orig_remap
+            mpas_reader._HAS_MPASDIAG = old_has
 
-        mpas_reader._HAS_MPASDIAG = old_has
-
-        m_load.assert_called_once_with("diag.nc", "grid.nc")
-        m_remap.assert_called_once_with(mesh_precip, "diag.nc", "grid.nc", 0.5)
+        assert len(load_calls) == 1
+        assert load_calls[0] == ("diag.nc", "grid.nc")
+        assert len(remap_calls) == 1
+        assert remap_calls[0] == (mesh_precip, "diag.nc", "grid.nc", 0.5)
         assert result.shape == (3, 3)

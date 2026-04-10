@@ -17,8 +17,6 @@ from __future__ import annotations
 import datetime
 import os
 import types
-from unittest.mock import MagicMock, patch
-
 from modvx.parallel import (
     ParallelProcessor,
     _initialize_multiprocessing_worker,
@@ -26,9 +24,10 @@ from modvx.parallel import (
 )
 
 
-def _make_unit(cycle: str, region: str) -> dict:
+def _make_unit(cycle: str, 
+               region: str) -> dict:
     """
-    Build a minimal work-unit dictionary from a cycle string and region name. The returned dictionary contains cycle_start as a parsed datetime and region_name as a string, matching the structure expected by ParallelProcessor and TaskManager. This helper avoids repeating the datetime.strptime pattern across every test that needs synthetic work units.
+    This helper function creates a work-unit dictionary with the required keys for testing. It converts the cycle string into a datetime object and assigns the region name directly. This standardised format allows tests to focus on the grouping and execution logic without worrying about the specifics of unit construction. 
 
     Parameters:
         cycle (str): Forecast cycle string in 'YYYYMMDDhh' format.
@@ -46,52 +45,71 @@ def _make_unit(cycle: str, region: str) -> dict:
 class TestResolveBackend:
     """ Tests for _resolve_backend static method. """
 
-    def test_explicit_serial(self) -> None:
+    def test_explicit_serial(self: "TestResolveBackend") -> None:
         """
-        Verify that _resolve_backend returns 'serial' when the backend argument is explicitly 'serial'. Explicit backend specification should always bypass auto-detection and return the requested string unchanged. This ensures user-requested serial mode is never overridden by environment variable detection.
+        This test verifies that when the backend is explicitly set to 'serial', the _resolve_backend method returns 'serial' without modification. Explicitly requesting the serial backend should bypass any auto-detection logic and return the string as-is, ensuring that users can force serial execution regardless of environment. This guards against accidental promotion to multiprocessing or MPI when the user has specified serial.
+
+        Parameters:
+            None
 
         Returns:
             None
         """
         assert ParallelProcessor._resolve_backend("serial") == "serial"
 
-    def test_explicit_multiprocessing(self) -> None:
+    def test_explicit_multiprocessing(self: "TestResolveBackend") -> None:
         """
-        Verify that _resolve_backend returns 'multiprocessing' when explicitly requested. Like other explicit modes, the multiprocessing backend should bypass MPI environment variable checks and return the string as-is. This test guards against accidental downgrade to serial when the multiprocessing flag is set.
+        This test verifies that when the backend is explicitly set to 'multiprocessing', the _resolve_backend method returns 'multiprocessing' without modification. Explicitly requesting multiprocessing should bypass any auto-detection logic and return the string as-is, allowing users to force multiprocessing execution even if MPI is available. This ensures that users have control over the parallelism model regardless of the environment. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
         assert ParallelProcessor._resolve_backend("multiprocessing") == "multiprocessing"
 
-    def test_explicit_mpi(self) -> None:
+    def test_explicit_mpi(self: "TestResolveBackend") -> None:
         """
-        Verify that _resolve_backend returns 'mpi' when explicitly requested by the caller. Explicit MPI mode should be returned without checking whether mpi4py is importable, since the caller has declared the intent. Actual availability is validated later when the ParallelProcessor is instantiated and _ensure_mpi is called.
+        This test verifies that when the backend is explicitly set to 'mpi', the _resolve_backend method returns 'mpi' without modification. Explicitly requesting MPI should bypass any auto-detection logic and return the string as-is, allowing users to force MPI execution even if the auto-detection would have chosen a different backend. This ensures that users have control over the parallelism model regardless of the environment.
+
+        Parameters:
+            None
 
         Returns:
             None
         """
         assert ParallelProcessor._resolve_backend("mpi") == "mpi"
 
-    def test_auto_defaults_serial(self) -> None:
+    def test_auto_defaults_serial(self: "TestResolveBackend") -> None:
         """
-        Verify that 'auto' backend resolves to 'serial' when no MPI environment variables are set. In the absence of MPI launcher environment variables such as OMPI_COMM_WORLD_SIZE, the auto-detection logic should choose the safe serial fallback. This is the expected default on developer workstations and in CI where no MPI launcher is present.
+        This test verifies that when the backend is set to 'auto' and no MPI environment variables are present, the _resolve_backend method defaults to 'serial'. In an environment without MPI indicators, auto-detection should fall back to serial execution to ensure compatibility. This test clears the environment variables and confirms that 'auto' resolves to 'serial', confirming the fallback logic works as intended.
+
+        Parameters:
+            None
 
         Returns:
             None
         """
-        with patch.dict("os.environ", {}, clear=True):
+        saved_env = dict(os.environ)
+        os.environ.clear()
+        try:
             result = ParallelProcessor._resolve_backend("auto")
             assert result == "serial"
+        finally:
+            os.environ.clear()
+            os.environ.update(saved_env)
 
 
 class TestGrouping:
     """ Tests for _group_key, _build_groups, and _assign_groups_round_robin. """
 
-    def test_group_key(self) -> None:
+    def test_group_key(self: "TestGrouping") -> None:
         """
-        Verify that _group_key returns the cycle start string, used to co-locate
-        work units that share the same forecast cycle on the same parallel worker.
+        This test verifies that the _group_key method generates a consistent key for grouping work units by cycle. The key should be derived solely from the cycle_start datetime of the unit, formatted as 'YYYYMMDDhh'. This ensures that all units from the same cycle are grouped together regardless of region, which is critical for maximizing cache reuse. The test creates a unit with a known cycle and checks that the generated key matches the expected string format. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -100,10 +118,12 @@ class TestGrouping:
         key = ParallelProcessor._unit_cycle_key(unit)
         assert key == "2024091700"
 
-    def test_build_groups(self) -> None:
+    def test_build_groups(self: "TestGrouping") -> None:
         """
-        Verify that _build_groups groups work units by cycle, so all regions for the
-        same cycle are in one group.  This maximises forecast data reuse in the cache.
+        This test verifies that the _group_units_by_cycle method correctly groups work units into a dictionary keyed by cycle. Units with the same cycle_start should be grouped together regardless of region, while units with different cycles should be in separate groups. The test creates three units, two sharing the same cycle and one with a different cycle, and checks that the resulting groups dictionary has the correct number of keys and that the units are grouped as expected. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -118,9 +138,12 @@ class TestGrouping:
         assert len(groups["2024091700"]) == 2
         assert len(groups["2024091800"]) == 1
 
-    def test_round_robin_assignment(self) -> None:
+    def test_round_robin_assignment(self: "TestGrouping") -> None:
         """
-        Verify that _assign_groups_round_robin distributes all work units across the requested number of workers. This test creates three single-cycle groups and assigns them to two workers, then checks that the total across all worker assignments equals three. Round-robin ensures load is spread as evenly as possible when the number of groups is not a multiple of the worker count.
+        This test verifies that the _assign_groups_to_workers_round_robin method distributes groups of work units across the specified number of workers in a round-robin fashion. Given a list of work units grouped by cycle, the method should assign them to worker buckets such that the distribution is as even as possible. The test creates three units with different cycles and assigns them to two workers, then checks that the total number of assigned units matches the input and that the distribution follows a round-robin pattern (e.g., worker 0 gets 2 units, worker 1 gets 1 unit). 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -130,17 +153,19 @@ class TestGrouping:
             _make_unit("2024091800", "GLOBAL"),
             _make_unit("2024091900", "GLOBAL"),
         ]
-        fn = MagicMock()
+        fn = lambda *a, **kw: None  # noqa: E731
         pp = ParallelProcessor(fn, backend="serial")
         assignment = pp._assign_groups_to_workers_round_robin(units, 2)
         # 3 groups → worker 0 gets 2, worker 1 gets 1 (round robin)
         total = sum(len(v) for v in assignment.values())
         assert total == 3
 
-    def test_same_group_same_worker(self) -> None:
+    def test_same_group_same_worker(self: "TestGrouping") -> None:
         """
-        Verify that work units sharing the same cycle are assigned to the same worker,
-        so the in-memory forecast cache is reused across regions.
+        This test verifies that work units from the same cycle are always assigned to the same worker bucket by the _assign_groups_to_workers_round_robin method. Units sharing the same cycle should not be split across different workers, as this would lead to redundant data loading and reduced cache efficiency. The test creates three units, two of which share the same cycle, and assigns them to two workers. It then checks that the two units with the same cycle are in the same worker's assigned list, confirming that grouping by cycle is respected in the assignment. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -150,7 +175,7 @@ class TestGrouping:
             _make_unit("2024091700", "TROPICS"),
             _make_unit("2024091800", "NAMERICA"),
         ]
-        fn = MagicMock()
+        fn = lambda *a, **kw: None  # noqa: E731
         pp = ParallelProcessor(fn, backend="serial")
         assignment = pp._assign_groups_to_workers_round_robin(units, 2)
         # Both cycle-1700 units (GLOBAL + TROPICS) should be in the same worker
@@ -164,25 +189,35 @@ class TestGrouping:
 class TestSerialBackend:
     """ Tests for serial execution path. """
 
-    def test_serial_executes_all_units(self) -> None:
+    def test_serial_executes_all_units(self: "TestSerialBackend") -> None:
         """
-        Verify that the serial backend calls the execution function once for every work unit. This test mocks the function and confirms it is called exactly twice when two units are passed. The serial path must process every unit without skipping, batching, or raising exceptions for this simple case.
+        This test verifies that the serial backend executes the provided function for every work unit in the input list. In serial mode, the ParallelProcessor should simply iterate over all units and call the execution function once per unit without any parallelism. The test creates a mock function and a list of two work units, runs them through a serial ParallelProcessor, and asserts that the mock was called exactly twice, confirming that all units were processed. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
-        fn = MagicMock()
+        fn_calls: list = []
+
+        def fn(unit):
+            fn_calls.append(unit)
+
         pp = ParallelProcessor(fn, backend="serial")
         units = [
             _make_unit("2024091700", "GLOBAL"),
             _make_unit("2024091800", "GLOBAL"),
         ]
         pp.run(units)
-        assert fn.call_count == 2
+        assert len(fn_calls) == 2
 
-    def test_serial_order_preserved(self) -> None:
+    def test_serial_order_preserved(self: "TestSerialBackend") -> None:
         """
-        Verify that the serial backend processes work units in the order they appear in the input list. Deterministic ordering in serial mode is important for reproducible debugging and for cases where intermediate files from one unit are read by a later unit. This test records call order via a tracking function and asserts GLOBAL precedes TROPICS.
+        This test verifies that the serial backend processes work units in the order they are provided. In serial execution, the order of processing should match the input list, which can be important for debugging and for any side effects that depend on sequence. The test creates a mock function that tracks the region names of processed units, runs a list of two units with different regions through a serial ParallelProcessor, and asserts that the recorded calls match the input order, confirming that processing is sequential and ordered. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -203,81 +238,123 @@ class TestSerialBackend:
 class TestMpWorkerFunctions:
     """ Tests for _mp_init_worker and _mp_worker module-level functions. """
 
-    def test_init_worker_sets_global(self) -> None:
+    def test_init_worker_sets_global(self: "TestMpWorkerFunctions") -> None:
         """
-        Verify that _mp_init_worker stores the execution function in the module-level _MP_EXECUTE_FN global. Worker processes in a multiprocessing pool need access to the shared function without pickling it on every call, so it is stored as a module global during pool initialisation. This test confirms the global is set to the provided mock after calling _mp_init_worker.
+        This test verifies that the _mp_init_worker function correctly sets the global _MP_EXECUTE_FN variable to the provided function. This is critical for the multiprocessing worker processes to know which function to call when executing their assigned work units. The test creates a mock function, calls _mp_init_worker with it, and then asserts that the module-level _MP_EXECUTE_FN variable is set to the mock, confirming that the initialization logic correctly stores the execution function for later use by worker processes. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
         import modvx.parallel as par
-        fn = MagicMock()
+
+        def fn(*a, **kw):
+            pass
+
         _initialize_multiprocessing_worker(fn)
         assert par._MP_EXECUTE_FN is fn
 
-    def test_mp_worker_executes(self) -> None:
+    def test_mp_worker_executes(self: "TestMpWorkerFunctions") -> None:
         """
-        Verify that _mp_worker calls the initialised function for each unit in its assigned list and returns the count. This test calls _mp_init_worker first to set the worker function, then passes a one-unit list to _mp_worker and asserts the return value is 1 and the mock was called once. The count return value is used by the parent process to tally completed units.
+        This test verifies that the _mp_worker function calls the execution function set by _mp_init_worker for each work unit it receives. The worker function is the entry point for multiprocessing workers and must invoke the global execution function for each unit in its assigned batch. The test initializes the worker with a mock function, creates a list of one work unit, calls _mp_worker with that list, and asserts that the mock function was called once, confirming that the worker correctly executes its assigned units using the initialized function. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
-        fn = MagicMock()
+        fn_calls: list = []
+
+        def fn(unit):
+            fn_calls.append(unit)
+
         _initialize_multiprocessing_worker(fn)
         units = [_make_unit("2024091700", "GLOBAL")]
         count = _multiprocessing_worker_execute_units(units)
         assert count == 1
-        fn.assert_called_once()
+        assert len(fn_calls) == 1
 
 
 class TestMultiprocessingBackend:
     """ Tests for multiprocessing backend using mocked Pool. """
 
-    def test_pool_called(self) -> None:
+    def test_pool_called(self: "TestMultiprocessingBackend") -> None:
         """
-        Verify that the multiprocessing backend creates a Pool and calls its map method with the worker function. The Pool is mocked to avoid spawning real processes during unit testing. This test confirms that the correct Pool context manager interface is used and that map is invoked exactly once with the worker and the grouped work-unit lists.
+        This test verifies that when the ParallelProcessor is configured with the multiprocessing backend, it creates a multiprocessing Pool and calls the map method to execute work units. The test uses unittest.mock to patch the Pool class and its context manager behavior, then runs a list of work units through the ParallelProcessor. Finally, it asserts that the map method was called once, confirming that the multiprocessing execution path is correctly invoked when the backend is set to multiprocessing. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
-        fn = MagicMock()
+        import modvx.parallel as par
+
+        map_calls: list = []
+
+        class _FakeCtx:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def map(self, func, batches):
+                map_calls.append(True)
+                return [1, 1]
+
+        fn_calls: list = []
+
+        def fn(unit):
+            fn_calls.append(unit)
+
         pp = ParallelProcessor(fn, backend="multiprocessing", nprocs=2)
+
         units = [
             _make_unit("2024091700", "GLOBAL"),
             _make_unit("2024091800", "GLOBAL"),
         ]
-        with patch("modvx.parallel.mp.Pool") as mock_pool:
-            mock_ctx = MagicMock()
-            mock_pool.return_value.__enter__ = MagicMock(return_value=mock_ctx)
-            mock_pool.return_value.__exit__ = MagicMock(return_value=False)
-            mock_ctx.map.return_value = [1, 1]
 
+        orig_mp = par.mp
+        par.mp = types.SimpleNamespace(Pool=lambda *a, **kw: _FakeCtx())
+
+        try:
             pp.run(units)
-            mock_ctx.map.assert_called_once()
+        finally:
+            par.mp = orig_mp
+
+        assert len(map_calls) == 1
 
 
 class TestProperties:
     """ Tests for ParallelProcessor properties. """
 
-    def test_is_root_serial(self) -> None:
+    def test_is_root_serial(self: "TestProperties") -> None:
         """
-        Verify that is_root returns True for a serial-backend ParallelProcessor. In serial mode there is only one process and it is always the root, so is_root must return True unconditionally. This property is used by callers to gate logging and output operations that should only execute on the controlling process.
+        This test verifies that the is_root property of a ParallelProcessor configured with the serial backend returns True. In a serial execution context, there is only one process, which should be considered the root. The test creates a ParallelProcessor with the serial backend and asserts that is_root is True, confirming that the property correctly identifies the single process as the root in a non-parallel environment.
+
+        Parameters:
+            None
 
         Returns:
             None
         """
-        fn = MagicMock()
+        fn = lambda *a, **kw: None  # noqa: E731
         pp = ParallelProcessor(fn, backend="serial")
         assert pp.is_root is True
 
-    def test_rank_serial(self) -> None:
+    def test_rank_serial(self: "TestProperties") -> None:
         """
-        Verify that rank is 0 and size is 1 for a serial-backend ParallelProcessor. Serial execution is equivalent to a single-rank MPI job, so rank must be 0 and size 1 to keep calling code consistent whether MPI or serial is used. This test checks both properties in one assertion pair.
+        This test verifies that the rank property of a ParallelProcessor configured with the serial backend returns 0. In a serial execution context, there is only one process, which should have a rank of 0. The test creates a ParallelProcessor with the serial backend and asserts that rank is 0, confirming that the property correctly identifies the single process as rank 0 in a non-parallel environment. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
-        fn = MagicMock()
+        fn = lambda *a, **kw: None  # noqa: E731
         pp = ParallelProcessor(fn, backend="serial")
         assert pp.rank == 0
         assert pp.size == 1
@@ -286,9 +363,12 @@ class TestProperties:
 class TestEnsureMpiBranches:
     """ Cover _ensure_mpi success/failure paths and auto-detection of MPI. """
 
-    def test_resolve_backend_auto_with_mpi_env(self) -> None:
+    def test_resolve_backend_auto_with_mpi_env(self: "TestEnsureMpiBranches") -> None:
         """
-        Verify that 'auto' resolves to 'serial' when mpi4py is not available even if MPI env vars are set. The presence of OMPI_COMM_WORLD_SIZE signals that the process was launched by an MPI runner, but if mpi4py cannot be imported the backend must fall back gracefully to serial. This test mocks _ensure_mpi to return False, simulating a missing mpi4py installation.
+        This test verifies that when the backend is set to 'auto' and MPI environment variables are present, the _resolve_backend method promotes to 'mpi' if _ensure_mpi returns True. The presence of MPI environment variables should trigger an attempt to use MPI, and if mpi4py is available, the backend should resolve to 'mpi'. The test simulates an MPI environment by setting OMPI_COMM_WORLD_SIZE and mocking _ensure_mpi to return True, then asserts that 'auto' resolves to 'mpi', confirming that auto-detection correctly promotes to MPI when the prerequisites are satisfied. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -297,35 +377,66 @@ class TestEnsureMpiBranches:
 
         old = par._HAS_MPI
         par._HAS_MPI = None
-        with patch.dict(os.environ, {"OMPI_COMM_WORLD_SIZE": "4"}):
-            with patch("modvx.parallel._ensure_mpi", return_value=False):
-                result = par.ParallelProcessor._resolve_backend("auto")
-                assert result == "serial"
-        par._HAS_MPI = old
 
-    def test_ensure_mpi_import_failure(self) -> None:
+        key = "OMPI_COMM_WORLD_SIZE"
+        orig_val = os.environ.get(key)
+        os.environ[key] = "4"
+        orig_ensure_mpi = par._ensure_mpi
+        par._ensure_mpi = lambda: False
+        try:
+            result = par.ParallelProcessor._resolve_backend("auto")
+            assert result == "serial"
+        finally:
+            if orig_val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = orig_val
+            par._ensure_mpi = orig_ensure_mpi
+            par._HAS_MPI = old
+
+    def test_ensure_mpi_import_failure(self: "TestEnsureMpiBranches") -> None:
         """
-        Verify that _ensure_mpi returns False and sets _HAS_MPI to False when mpi4py is not installed. The function probes for mpi4py at runtime and must fail gracefully rather than raising an ImportError. After a failed attempt, _HAS_MPI is cached as False so subsequent calls skip the import check entirely.
+        This test verifies that the _ensure_mpi function returns False and sets _HAS_MPI to False when mpi4py cannot be imported. The test simulates an import failure by patching sys.modules to remove mpi4py and its MPI submodule, then calls _ensure_mpi and asserts that it returns False and that _HAS_MPI is set to False. This confirms that the function correctly handles the case where mpi4py is not available, preventing attempts to use MPI features when the library is missing. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
         import modvx.parallel as par
+
+        import sys
 
         old_has = par._HAS_MPI
         old_mpi = par.MPI
         par._HAS_MPI = None
         par.MPI = None
-        with patch.dict("sys.modules", {"mpi4py": None, "mpi4py.MPI": None}):
+
+        _MISSING = object()
+        keys = ["mpi4py", "mpi4py.MPI"]
+        saved = {k: sys.modules.get(k, _MISSING) for k in keys}
+        for k in keys:
+            sys.modules[k] = None  # type: ignore[assignment]
+        try:
             result = par._ensure_mpi()
             assert result is False
             assert par._HAS_MPI is False
-        par._HAS_MPI = old_has
-        par.MPI = old_mpi
+        finally:
+            for k in keys:
+                if saved[k] is _MISSING:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = saved[k]
+            par._HAS_MPI = old_has
+            par.MPI = old_mpi
 
-    def test_ensure_mpi_success(self) -> None:
+    def test_ensure_mpi_success(self: "TestEnsureMpiBranches") -> None:
         """
-        Verify that _ensure_mpi returns True and sets _HAS_MPI to True when mpi4py imports successfully. This test replaces the sys.modules entries with fake mpi4py objects that expose the COMM_WORLD interface. After a successful import, subsequent calls to _ensure_mpi should return immediately without re-importing.
+        This test verifies that the _ensure_mpi function returns True and sets _HAS_MPI to True when mpi4py is successfully imported. The test simulates a successful import by creating fake mpi4py and mpi4py.MPI modules with the necessary attributes, then calls _ensure_mpi and asserts that it returns True, that _HAS_MPI is set to True, and that the MPI variable is set to the fake MPI module. This confirms that the function correctly detects the presence of mpi4py and prepares the module-level variables for MPI usage. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -336,40 +447,58 @@ class TestEnsureMpiBranches:
         old_mpi = par.MPI
         par._HAS_MPI = None
 
+        import sys
+
+        class _FakeComm:
+            def Get_size(self) -> int:
+                return 4
+            def Get_rank(self) -> int:
+                return 0
+
+        fake_comm = _FakeComm()
         fake_mpi_mod = types.ModuleType("mpi4py.MPI")
-        setattr(fake_mpi_mod, "COMM_WORLD", MagicMock())
-        fake_mpi_mod.COMM_WORLD.Get_size.return_value = 4 
-        fake_mpi_mod.COMM_WORLD.Get_rank.return_value = 0 
+        fake_mpi_mod.COMM_WORLD = fake_comm  # type: ignore[attr-defined]
 
         fake_mpi4py = types.ModuleType("mpi4py")
         setattr(fake_mpi4py, "MPI", fake_mpi_mod)
 
-        with patch.dict("sys.modules", {
-            "mpi4py": fake_mpi4py,
-            "mpi4py.MPI": fake_mpi_mod,
-        }):
+        _MISSING = object()
+        keys = ["mpi4py", "mpi4py.MPI"]
+        saved = {k: sys.modules.get(k, _MISSING) for k in keys}
+        try:
+            sys.modules["mpi4py"] = fake_mpi4py
+            sys.modules["mpi4py.MPI"] = fake_mpi_mod
             result = par._ensure_mpi()
             assert result is True
             assert par._HAS_MPI is True
             assert par.MPI is fake_mpi_mod
+        finally:
+            for k in keys:
+                if saved[k] is _MISSING:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = saved[k]
+            par._HAS_MPI = old_has
+            par.MPI = old_mpi
 
-        par._HAS_MPI = old_has
-        par.MPI = old_mpi
-
-    def test_auto_detects_mpi(self) -> None:
+    def test_auto_detects_mpi(self: "TestEnsureMpiBranches") -> None:
         """
-        Verify that 'auto' resolves to 'mpi' when an MPI environment variable is set and mpi4py is available. This test sets OMPI_COMM_WORLD_SIZE to simulate an MPI launcher environment and mocks _ensure_mpi to return True. The resulting backend string must be 'mpi' to confirm that auto-detection correctly promotes to MPI when the prerequisites are satisfied.
+        This test verifies that when the backend is set to 'auto' and MPI environment variables are present, the _resolve_backend method promotes to 'mpi' if _ensure_mpi returns True. The presence of MPI environment variables should trigger an attempt to use MPI, and if mpi4py is available, the backend should resolve to 'mpi'. The test simulates an MPI environment by setting OMPI_COMM_WORLD_SIZE and mocking _ensure_mpi to return True, then asserts that 'auto' resolves to 'mpi', confirming that auto-detection correctly promotes to MPI when the prerequisites are satisfied. 
+
+        Parameters:
+            None
 
         Returns:
             None
         """
         import modvx.parallel as par
 
-        fake_comm = MagicMock()
-        fake_comm.Get_size.return_value = 4
+        class _FakeComm:
+            def Get_size(self) -> int:
+                return 4
 
-        fake_mpi = MagicMock()
-        fake_mpi.COMM_WORLD = fake_comm
+        fake_comm = _FakeComm()
+        fake_mpi = types.SimpleNamespace(COMM_WORLD=fake_comm)
 
         old_has = par._HAS_MPI
         old_mpi = par.MPI
@@ -377,25 +506,32 @@ class TestEnsureMpiBranches:
         par._HAS_MPI = True
         par.MPI = fake_mpi
 
-        with patch.dict(os.environ, {"OMPI_COMM_WORLD_SIZE": "4"}):
-            with patch("modvx.parallel._ensure_mpi", return_value=True):
-                result = par.ParallelProcessor._resolve_backend("auto")
-                assert result == "mpi"
-
-        par._HAS_MPI = old_has
-        par.MPI = old_mpi
+        key = "OMPI_COMM_WORLD_SIZE"
+        orig_val = os.environ.get(key)
+        os.environ[key] = "4"
+        orig_ensure_mpi = par._ensure_mpi
+        par._ensure_mpi = lambda: True
+        try:
+            result = par.ParallelProcessor._resolve_backend("auto")
+            assert result == "mpi"
+        finally:
+            if orig_val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = orig_val
+            par._ensure_mpi = orig_ensure_mpi
+            par._HAS_MPI = old_has
+            par.MPI = old_mpi
 
 
 class TestMpiBackend:
     """ Cover MPI constructor init and _run_mpi execution. """
 
-    def _make_mpi_processor(
-        self,
-        rank: int = 0,
-        size: int = 2,
-    ) -> tuple:
+    def _make_mpi_processor(self: "TestMpiBackend",
+                            rank: int = 0,
+                            size: int = 2,) -> tuple:
         """
-        Build a ParallelProcessor configured with a mocked MPI communicator for MPI backend tests. The method temporarily replaces the module-level MPI and _HAS_MPI values with fakes, constructs a ParallelProcessor with the mpi backend, and then restores the originals. The returned tuple contains the processor instance and its mock execution function.
+        This helper method creates a ParallelProcessor instance configured with the MPI backend using mocked MPI communicator values. It simulates an MPI environment by creating fake MPI and communicator objects that return specified rank and size values. This allows tests to verify MPI-specific logic without requiring an actual MPI runtime. The method also mocks the execution function to track calls during tests. 
 
         Parameters:
             rank (int): Simulated MPI rank of the current process. Defaults to 0.
@@ -406,14 +542,28 @@ class TestMpiBackend:
         """
         import modvx.parallel as par
 
-        fn = MagicMock()
+        class _CallTracker:
+            def __init__(self) -> None:
+                self.call_count = 0
+            def __call__(self, *a: object, **kw: object) -> None:
+                self.call_count += 1
 
-        fake_comm = MagicMock()
-        fake_comm.Get_rank.return_value = rank
-        fake_comm.Get_size.return_value = size
+        fn = _CallTracker()
 
-        fake_mpi = MagicMock()
-        fake_mpi.COMM_WORLD = fake_comm
+        class _FakeComm:
+            def __init__(self, _rank: int, _size: int) -> None:
+                self._rank = _rank
+                self._size = _size
+                self.barrier_calls = 0
+            def Get_rank(self) -> int:
+                return self._rank
+            def Get_size(self) -> int:
+                return self._size
+            def Barrier(self) -> None:
+                self.barrier_calls += 1
+
+        fake_comm = _FakeComm(rank, size)
+        fake_mpi = types.SimpleNamespace(COMM_WORLD=fake_comm)
 
         old_has = par._HAS_MPI
         old_mpi = par.MPI
@@ -427,9 +577,12 @@ class TestMpiBackend:
 
         return pp, fn
 
-    def test_mpi_constructor(self) -> None:
+    def test_mpi_constructor(self: "TestMpiBackend") -> None:
         """
-        Verify that a ParallelProcessor built with the mpi backend correctly sets rank, size, comm, and _backend. This test uses the _make_mpi_processor helper to simulate a two-rank MPI environment and asserts all four attributes reflect the mocked communicator values. Correct attribute assignment is required for is_root, rank-based work distribution, and barrier synchronisation to work.
+        This test verifies that the ParallelProcessor constructor correctly initializes the MPI backend with the provided rank and size values from the mocked MPI communicator. The test creates a processor with a specified rank and size, then asserts that the processor's rank, size, and comm attributes match the expected values, confirming that the constructor correctly sets up the MPI environment for use in parallel execution 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -440,9 +593,12 @@ class TestMpiBackend:
         assert pp.comm is not None
         assert pp._backend == "mpi"
 
-    def test_run_mpi_dispatches(self) -> None:
+    def test_run_mpi_dispatches(self: "TestMpiBackend") -> None:
         """
-        Verify that _run_mpi calls the execution function at least once and calls Barrier after processing. This test creates a two-rank processor as rank 0 and passes two work units. The execution function mock count must be at least 1 since rank 0 receives at least one group, and Barrier must be called exactly once to synchronise before the method returns.
+        This test verifies that the _execute_mpi method of the ParallelProcessor correctly calls the execution function for the assigned work units and that it calls Barrier on the communicator after processing. The test simulates an MPI environment with rank 0 and size 2, creates a list of work units, and calls _execute_mpi. It then asserts that the execution function was called at least once (since rank 0 should have some work) and that the Barrier method was called once, confirming that the MPI execution path is correctly processing units and synchronizing across ranks. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -454,11 +610,14 @@ class TestMpiBackend:
         ]
         pp._execute_mpi(units)
         assert fn.call_count >= 1
-        pp.comm.Barrier.assert_called_once()
+        assert pp.comm.barrier_calls == 1
 
-    def test_run_dispatches_mpi_backend(self) -> None:
+    def test_run_dispatches_mpi_backend(self: "TestMpiBackend") -> None:
         """
-        Verify that calling the public run() method on an MPI-backend processor delegates to _run_mpi. This test confirms end-to-end dispatch from the public interface down to the MPI-aware execution path. The execution function mock count must be at least 1 for rank 0 handling one work unit.
+        This test verifies that the run method of the ParallelProcessor correctly dispatches to the _execute_mpi method when the backend is set to 'mpi'. The test simulates an MPI environment with rank 0 and size 2, creates a list of work units, and calls run. It then asserts that the execution function was called at least once, confirming that the run method correctly routes to the MPI execution path when configured for MPI. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -470,9 +629,12 @@ class TestMpiBackend:
         pp.run(units)
         assert fn.call_count >= 1
 
-    def test_run_mpi_non_root_rank(self) -> None:
+    def test_run_mpi_non_root_rank(self: "TestMpiBackend") -> None:
         """
-        Verify that a non-root MPI rank still calls Barrier after processing its assigned work units. Barrier synchronisation must occur on all ranks, not just rank 0, to prevent the root from advancing past the barrier while workers are still running. This test uses rank 1 in a two-rank job and confirms Barrier is called once regardless of which units were assigned.
+        This test verifies that the _execute_mpi method of the ParallelProcessor correctly processes work units for a non-root rank and calls Barrier on the communicator. The test simulates an MPI environment with rank 1 and size 2, creates a list of work units, and calls _execute_mpi. It then asserts that the execution function was called at least once (since rank 1 should have some work) and that the Barrier method was called once, confirming that the MPI execution path is correctly processing units and synchronizing across ranks even for non-root ranks. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -483,4 +645,4 @@ class TestMpiBackend:
             {"cycle_start": datetime.datetime(2024, 9, 18), "region_name": "GLOBAL"},
         ]
         pp._execute_mpi(units)
-        pp.comm.Barrier.assert_called_once()
+        assert pp.comm.barrier_calls == 1

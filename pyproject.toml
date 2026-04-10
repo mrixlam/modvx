@@ -61,6 +61,7 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 filterwarnings = [
     "ignore:numpy.ndarray size changed:RuntimeWarning",
+    "ignore:.*deprecated - use.*:DeprecationWarning",
 ]
 
 [tool.ruff]

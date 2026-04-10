@@ -20,7 +20,7 @@ tests/testdata/data/masks
 .venv/
 venv/
 env/
-
+temp/
 # IDE
 .vscode/
 .idea/

@@ -3,7 +3,7 @@
 """
 MPAS unstructured-mesh forecast reader for modvx.
 
-This module defines the MPASReader class, which is responsible for loading forecast data from MPAS diagnostic NetCDF files. The reader handles the specific structure and conventions of MPAS output, including parsing valid times from filenames, normalizing coordinate systems, and extracting relevant variables for verification. By encapsulating MPAS-specific logic in this class, we can maintain a clean separation between data access and the core verification algorithms, allowing for easier maintenance and potential extension to other model formats in the future.
+This module provides functions to read total precipitation from MPAS diagnostic files on the native unstructured mesh and remap it to a regular latitude-longitude grid using the mpasdiag library. The primary public function is load_and_remap_mpas_precip, which combines loading and remapping into a single call for convenience. The module includes internal helper functions for efficient variable loading and checking for mpasdiag availability. The remapping process automatically determines geographic bounds from the MPAS mesh coordinates and applies nearest-neighbour interpolation with masking of out-of-domain points. The resulting remapped DataArray is compatible with the rest of the modvx pipeline for verification against observations.
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 _HAS_MPASDIAG: Optional[bool] = None
 
 
-def _variables_to_drop(filepath: str, keep: tuple[str, ...]) -> list[str]:
+def _variables_to_drop(filepath: str, 
+                       keep: tuple[str, ...]) -> list[str]:
     """
-    This helper function identifies which variables in a NetCDF file should be dropped when loading with xarray, based on a specified tuple of variable names to keep. It opens the file in a lightweight manner to probe the available variables and returns a list of those that are not in the keep tuple. This allows for efficient loading of only the necessary variables while avoiding memory overhead from unwanted data.
+    This internal helper function takes a file path to a NetCDF dataset and a tuple of variable names to keep, and returns a list of variable names that are present in the dataset but not in the keep tuple. This is used to identify which variables can be dropped when loading the dataset with xarray to save memory. The function opens the dataset in a context manager to read the variable names without loading the full data into memory, and constructs a list of variable names that should be dropped based on the provided keep tuple. 
 
     Parameters:
         filepath (str): Path to the NetCDF file to probe.
@@ -42,13 +43,13 @@ def _variables_to_drop(filepath: str, keep: tuple[str, ...]) -> list[str]:
 
 def _ensure_mpasdiag_available() -> None:
     """
-    This function checks for the availability of the mpasdiag package, which is required for remapping MPAS data to a regular lat-lon grid. It uses a module-level cache variable to avoid repeated import attempts after the first check. If mpasdiag is not available, it raises an ImportError with instructions for installation.
+    This internal helper function checks for the availability of the mpasdiag library, which is required for remapping MPAS data to a regular lat-lon grid. It uses a module-level cache variable to store the availability status after the first check, so that subsequent calls can return immediately without attempting to import again. If mpasdiag is not available, it raises an ImportError with instructions on how to install it. This function should be called at the beginning of any public function that relies on mpasdiag to ensure that the necessary dependencies are present before proceeding. 
 
+    Parameters:
+        None
+        
     Returns:
         None
-
-    Raises:
-        ImportError: If the ``mpasdiag`` package cannot be imported.
     """
     # Check the cached availability flag to avoid repeated import attempts
     global _HAS_MPASDIAG
@@ -71,12 +72,10 @@ def _ensure_mpasdiag_available() -> None:
         ) from exc
 
 
-def load_mpas_precip(
-    diag_file: str,
-    grid_file: str,
-) -> xr.DataArray:
+def load_mpas_precip(diag_file: str,
+                     grid_file: str,) -> xr.DataArray:
     """
-    Load total (cumulative) precipitation from a single MPAS diagnostic file on the native mesh. Both convective (``rainc``) and non-convective (``rainnc``) precipitation components are read and summed, with fallback to whichever component is available when only one is present. Grid coordinates (``lonCell``, ``latCell``) are merged from the grid file if they are absent from the diagnostic file. The returned array remains on the unstructured MPAS mesh; call remap_to_latlon for conversion to a regular grid.
+    This function loads total precipitation from an MPAS diagnostic file on the native unstructured mesh. It checks for the presence of ``rainc`` and/or ``rainnc`` variables in the diagnostic file, loads only those variables to save memory, and sums them if both are present to compute total precipitation. If the necessary coordinates for remapping (``lonCell``/``latCell``) are not present in the diagnostic file, it loads them from the provided grid file and merges them into the dataset. The resulting DataArray contains total cumulative precipitation on the MPAS mesh with appropriate attributes and coordinates for remapping. 
 
     Parameters:
         diag_file (str): Path to an MPAS ``diag.*`` NetCDF file containing ``rainc`` and/or ``rainnc``.
@@ -141,14 +140,12 @@ def load_mpas_precip(
     return total_precip
 
 
-def remap_to_latlon(
-    data: xr.DataArray,
-    dataset_or_file: str,
-    grid_file: str,
-    resolution: float = 0.1,
-) -> xr.DataArray:
+def remap_to_latlon(data: xr.DataArray,
+                    dataset_or_file: str,
+                    grid_file: str,
+                    resolution: float = 0.1,) -> xr.DataArray:
     """
-    Remap a field from the unstructured MPAS mesh to a regular latitude-longitude grid. Geographic bounds are automatically determined from the mesh coordinates via MPASGeographicUtils, so no domain information needs to be supplied explicitly. Remapping is performed using ``remap_mpas_to_latlon_with_masking`` from mpasdiag with nearest-neighbour interpolation. After remapping, dimension names are standardised to ``latitude``/``longitude`` for pipeline compatibility.
+    This function remaps a DataArray defined on the unstructured MPAS mesh to a regular latitude-longitude grid using the mpasdiag library. It first ensures that mpasdiag is available, then loads only the necessary coordinate variables from the provided dataset or grid file to determine the geographic bounds of the MPAS mesh. The remapping is performed using nearest-neighbour interpolation with masking of out-of-domain points, and the resulting DataArray is returned with standardized latitude and longitude dimension names. This function is designed to be flexible in accepting either a dataset file that contains coordinates or a separate grid file, and it automatically handles the extraction of geographic bounds to ensure that the remapped grid covers the appropriate area. 
 
     Parameters:
         data (xr.DataArray): Precipitation or other field on the unstructured MPAS mesh (``nCells`` dimension).
@@ -230,13 +227,11 @@ def remap_to_latlon(
     return remapped_da
 
 
-def load_and_remap_mpas_precip(
-    diag_file: str,
-    grid_file: str,
-    resolution: float = 0.1,
-) -> xr.DataArray:
+def load_and_remap_mpas_precip(diag_file: str,
+                               grid_file: str,
+                               resolution: float = 0.1,) -> xr.DataArray:
     """
-    Load total precipitation from an MPAS diag file and remap it to a regular lat-lon grid. This is the primary public entry point for MPAS forecast data, combining load_mpas_precip and remap_to_latlon into a single convenience call. It is used by FileManager.accumulate_forecasts when processing individual MPAS time steps. The mpasdiag library is required and will be lazily imported on the first call via ``_ensure_mpasdiag_available``.
+    This function combines the loading of total precipitation from an MPAS diagnostic file on the native unstructured mesh and remapping it to a regular latitude-longitude grid in a single call for convenience. It first calls load_mpas_precip to read the precipitation field from the diagnostic file, then calls remap_to_latlon to remap it to a regular grid using the provided grid file for coordinate information. The resulting DataArray contains total precipitation on a regular lat-lon grid, ready for verification against observations or further analysis. 
 
     Parameters:
         diag_file (str): Path to an MPAS ``diag.*`` NetCDF file containing precipitation variables.

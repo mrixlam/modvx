@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Task orchestration for modvx.
+Task orchestration for MODvx.
 
-This module defines the TaskManager class, which is responsible for constructing and managing the set of verification tasks to be executed based on the provided configuration. The TaskManager generates a comprehensive list of work units that represent individual combinations of forecast cycles, valid times, domains, thresholds, and window sizes as specified in the config. It also provides methods to retrieve these tasks in a format suitable for parallel processing. By centralizing task construction logic, the TaskManager ensures that all downstream components receive a consistent and complete set of work units to process.
+This module defines the TaskManager class, which orchestrates the end-to-end FSS verification pipeline for a configured experiment. It builds coarse-grained work-units based on forecast cycles and verification domains, executes the necessary data loading, preparation, metric computation, and result persistence for each work-unit, and provides a simple serial execution path. The TaskManager is designed to maximize data reuse by performing the full (threshold × window) parameter sweep within each work-unit, eliminating redundant I/O and processing that would occur with finer-grained units. 
  
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -31,16 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 class TaskManager:
-    """
-    Orchestrate the end-to-end FSS verification pipeline for a configured experiment. On construction, TaskManager instantiates FileManager, DataValidator, and PerfMetrics and configures Python logging according to the config flags. It exposes two key methods: build_work_units generates the (cycle × region) task list, and execute_work_unit processes a single task by loading data, preparing fields, computing FSS across all parameter combinations, and persisting results.
+    """ Orchestrate the end-to-end FSS verification pipeline for a configured experiment. """
 
-    Parameters:
-        config (ModvxConfig): Fully resolved run configuration with all experiment settings.
-    """
-
-    def __init__(self, config: ModvxConfig) -> None:
+    def __init__(self: "TaskManager", 
+                 config: ModvxConfig) -> None:
         """
-        This constructor initializes the TaskManager with the provided configuration, setting up necessary components and logging. It creates instances of FileManager, DataValidator, and PerfMetrics using the config, and calls a helper method to configure logging based on the config settings. The TaskManager is then ready to build work units and execute tasks as defined by the configuration.
+        This initialization method sets up the TaskManager with the provided ModvxConfig, initializing the FileManager, DataValidator, and PerfMetrics components that will be used throughout the task execution. It also validates the precip_accum_hours constraints to ensure that the effective accumulation period is compatible with the forecast step and observation interval, and configures logging based on the config settings to ensure consistent and informative log output across all components. 
 
         Parameters:
             config (ModvxConfig): Fully resolved run configuration with all experiment settings.
@@ -67,9 +63,12 @@ class TaskManager:
         self._setup_logging()
 
 
-    def _setup_logging(self) -> None:
+    def _setup_logging(self: "TaskManager") -> None:
         """
-        Configure Python's root logging system based on the current ModvxConfig settings. Log level is set to DEBUG when verbose mode is enabled, and INFO otherwise. A StreamHandler is always added for console output. When ``enable_logs`` is True, a FileHandler is also added, writing to a timestamped file in the configured log directory. The ``force=True`` argument to basicConfig ensures that existing handlers are replaced, allowing correct re-configuration at runtime.
+        This helper method configures the logging for the entire application based on the settings in the config. It sets the log level to DEBUG if verbose is enabled, otherwise INFO. It defines a consistent log message format that includes timestamps, log levels, and logger names for clarity. If file logging is enabled in the config, it ensures that the log directory exists and adds a FileHandler to write logs to a file named with the experiment name, verification domain, and timestamp. Finally, it configures the root logger with the determined level, format, date format, and handlers to ensure that all log messages across all components are captured according to these settings. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -112,12 +111,15 @@ class TaskManager:
         logging.basicConfig(level=level, format=fmt, datefmt=datefmt, handlers=handlers, force=True)
 
 
-    def _validate_precip_accum(self) -> None:
+    def _validate_precip_accum(self: "TaskManager") -> None:
         """
-        This helper method validates the constraints on the effective precipitation accumulation period derived from the config settings. Specifically, it checks that when accumulation is enabled (i.e., effective_precip_accum_hours > 0), the accumulation period must be a multiple of both the forecast step and the observation interval to ensure that the necessary data can be loaded and processed without misalignment. If any of these constraints are violated, a ValueError is raised with a descriptive message indicating the nature of the violation and the relevant config values.
+        This helper method validates the constraints on precip_accum_hours to ensure that the effective accumulation period is compatible with the forecast step and observation interval. Specifically, it checks that if accumulation is enabled (i.e., precip_accum_hours > 0), then it must be a multiple of both forecast_step_hours and observation_interval_hours. If any of these constraints are violated, it raises a ValueError with a descriptive message indicating the nature of the violation and the effective values involved. This validation ensures that the accumulation period can be properly aligned with the forecast steps and observation intervals, which is critical for accurate metric computation and consistent data handling throughout the pipeline.
 
-        Raises:
-            ValueError: When the constraints are violated.
+        Parameters:
+            None
+
+        Returns:
+            None
         """
         # Extract the config for easy access within this method.
         config = self.config
@@ -146,9 +148,12 @@ class TaskManager:
             )
 
 
-    def build_work_units(self) -> List[Dict[str, Any]]:
+    def build_work_units(self: "TaskManager") -> List[Dict[str, Any]]:
         """
-        Build and return the complete list of coarse-grained (cycle × region) work-units. Each work-unit is a dictionary with keys ``cycle_start``, ``region_name``, and ``mask_path``, representing one combination of forecast cycle and verification domain. The full (threshold × window) parameter sweep is handled inside execute_work_unit, so work-unit granularity is intentionally coarse to maximise data reuse. Only domains listed in config.vxdomain are included in the output.
+        This method constructs the list of work-units to be processed based on the configuration. Each work-unit represents a unique combination of forecast cycle start time and verification region. The method generates the list of cycle start times based on the initial and final cycle start and the cycle interval specified in the config. It then identifies the subset of regions from the config that are included in the verification domain list. Finally, it constructs a list of work-unit dictionaries, each containing the cycle start time, region name, and corresponding mask file path for all combinations of cycles and regions. This structured approach ensures that all necessary combinations are covered while maximizing data reuse within each work-unit.
+
+        Parameters:
+            None
 
         Returns:
             List[Dict[str, Any]]: List of work-unit dictionaries, one per (cycle, region) combination.
@@ -190,18 +195,13 @@ class TaskManager:
         return work_units
 
 
-    def _compute_metrics_for_valid_time(
-        self,
-        valid_time: datetime.datetime,
-        cycle_init_str: str,
-        cycle_start: datetime.datetime,
-        region_mask: Any,
-    ) -> Tuple[
-        Dict[Tuple[float, int], Dict[str, float]],
-        Dict[float, Dict[str, float]],
-    ]:
+    def _compute_metrics_for_valid_time(self: "TaskManager",
+                                        valid_time: datetime.datetime,
+                                        cycle_init_str: str,
+                                        cycle_start: datetime.datetime,
+                                        region_mask: Any,) -> Tuple[Dict[Tuple[float, int], Dict[str, float]],Dict[float, Dict[str, float]],]:
         """
-        This helper drives the per-timestep pipeline for a single valid_time: it loads accumulated forecast and observation fields via :class:`FileManager`, prepares them with :class:`DataValidator` (regridding and masking), optionally writes intermediate debug fields, computes FSS over all threshold/window combinations, and computes window-independent contingency metrics per threshold.
+        This helper method computes all FSS and contingency metrics for a single valid time, given the cycle initialization string, cycle start time, and region mask. It performs the following steps: 1) Accumulates the forecast and observation data for the valid time using the FileManager, 2) Prepares the data by regridding to a common grid, applying the region mask, and performing any necessary unit conversions using the DataValidator, 3) Computes the FSS batch for all (threshold, window) combinations using PerfMetrics, 4) Computes contingency metrics once per threshold using PerfMetrics. The method returns two dictionaries: one containing FSS results keyed by (threshold, window) and another containing contingency results keyed by threshold. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the accumulation window.
@@ -210,8 +210,7 @@ class TaskManager:
             region_mask (Any): Region mask DataArray used for domain masking.
 
         Returns:
-            Tuple[Dict[Tuple[float, int], Dict[str, float]], Dict[float, Dict[str, float]]]:
-                ``(fss_results, contingency_results)`` for the valid time.
+            Tuple[Dict[Tuple[float, int], Dict[str, float]], Dict[float, Dict[str, float]]]: ``(fss_results, contingency_results)`` for the valid time.
         """
         # Extract the config for easy access within this method.
         config = self.config
@@ -262,16 +261,14 @@ class TaskManager:
         # Return the FSS and contingency results for this valid time.
         return fss_results, contingency_by_threshold
 
-    def _persist_cycle_results(
-        self,
-        results_by_parameter: Dict[Tuple[float, int], List[Dict[str, float]]],
-        cycle_start: datetime.datetime,
-        region_name: str,
-        cycle_init_str: str,
-        num_valid_times: int,
-    ) -> None:
+    def _persist_cycle_results(self: "TaskManager",
+                               results_by_parameter: Dict[Tuple[float, int], List[Dict[str, float]]],
+                               cycle_start: datetime.datetime,
+                               region_name: str,
+                               cycle_init_str: str,
+                               num_valid_times: int,) -> None:
         """
-        This function writes one NetCDF result file per (threshold, window) combination using :class:`FileManager.save_fss_results`. It guards against the empty-result case by logging a warning rather than raising an exception, and logs a completion summary including the number of valid times and parameter combinations processed.
+        This function writes one NetCDF result file per (threshold, window) combination using :class:`FileManager.save_fss_results`. It guards against the empty-result case by logging a warning rather than raising an exception, and logs a completion summary including the number of valid times and parameter combinations processed. 
 
         Parameters:
             results_by_parameter (Dict[Tuple[float,int], List[Dict[str,float]]]): Collected metrics per (threshold, window) across the cycle.
@@ -306,16 +303,14 @@ class TaskManager:
             cycle_init_str, region_name, num_valid_times, num_param_combinations,
         )
 
-    def _persist_contingency_results(
-        self,
-        results_by_threshold: Dict[float, List[Dict[str, float]]],
-        cycle_start: datetime.datetime,
-        region_name: str,
-        cycle_init_str: str,
-        num_valid_times: int,
-    ) -> None:
+    def _persist_contingency_results(self: "TaskManager",
+                                     results_by_threshold: Dict[float, List[Dict[str, float]]],
+                                     cycle_start: datetime.datetime,
+                                     region_name: str,
+                                     cycle_init_str: str,
+                                     num_valid_times: int,) -> None:
         """
-        This function writes one NetCDF result file per threshold using :class:`FileManager.save_contingency_results`. It guards against the empty-result case by logging a warning rather than raising an exception, and logs a completion summary including the number of valid times and thresholds processed.
+        This function writes one NetCDF result file per threshold using :class:`FileManager.save_contingency_results`. It guards against the empty-result case by logging a warning rather than raising an exception, and logs a completion summary including the number of valid times and thresholds processed. 
 
         Parameters:
             results_by_threshold (Dict[float, List[Dict[str, float]]]): Collected contingency metrics per threshold across the cycle.
@@ -350,9 +345,10 @@ class TaskManager:
             cycle_init_str, region_name, num_valid_times, num_thresholds,
         )
 
-    def execute_work_unit(self, work_unit: Dict[str, Any]) -> None:
+    def execute_work_unit(self: "TaskManager", 
+                          work_unit: Dict[str, Any]) -> None:
         """
-        Execute a single (cycle, region) work-unit and persist all FSS and contingency results. For each valid time within the cycle, forecast and observation data are loaded and prepared exactly once, then the full (threshold × window) FSS parameter sweep is performed alongside window-independent contingency metrics computed per threshold. This design eliminates the redundant I/O and regridding that would occur if each (threshold, window) pair were a separate work-unit. FSS values are accumulated per parameter combination and saved in batch at the end of the cycle.
+        This method executes a single work-unit, which represents the full FSS computation for one cycle and region across all valid times and parameter combinations. It performs the following steps: 1) Extracts necessary information from the work unit, 2) Logs the start of processing for this cycle and region, 3) Loads the region mask once for reuse across all valid times, 4) Iterates over all valid times for the cycle, computing metrics for each valid time while accumulating results in memory, 5) Persists all results for the cycle after processing all valid times, even if some valid times failed. This approach maximizes data reuse and minimizes redundant I/O while ensuring that failures in individual valid times do not prevent the entire cycle from being processed. 
 
         Parameters:
             work_unit (dict): Work-unit dictionary with keys ``cycle_start``, ``region_name``, and ``mask_path``.
@@ -427,9 +423,12 @@ class TaskManager:
         self._persist_contingency_results(results_by_threshold, cycle_start, region_name, cycle_init_str, len(valid_times))
 
 
-    def run(self) -> None:
+    def run(self: "TaskManager") -> None:
         """
-        Build all work-units and execute them sequentially in the current process. This method provides a simple serial execution path without requiring ParallelProcessor. It is suitable for small experiments or debugging sessions where parallel overhead is unnecessary. For production runs requiring MPI or multiprocessing parallelism, use ParallelProcessor.run with the unit list from build_work_units instead.
+        This method runs the full FSS computation for the configured experiment by building the list of work-units and executing each one sequentially. It logs the start and completion of the entire process, as well as progress through each work-unit. The method ensures that all cycles and regions defined in the config are processed according to the defined parameters, and that results are persisted appropriately. 
+
+        Parameters:
+            None
 
         Returns:
             None

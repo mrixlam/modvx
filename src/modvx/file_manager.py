@@ -3,7 +3,7 @@
 """
 File I/O handling for MODvx.
 
-This module defines the FileManager class, which is responsible for constructing file paths for forecasts and observations based on the provided configuration, loading data from NetCDF files into xarray structures, caching intermediate results to avoid redundant I/O, and saving output files with standardized naming conventions. The FileManager abstracts away the details of file organization and access patterns, allowing other components of the pipeline to focus on data processing and analysis without worrying about where and how the data is stored. By centralizing file management logic, we can ensure consistent handling of file paths, formats, and metadata across the entire verification workflow.
+This module contains the FileManager class, which centralizes all filesystem operations for a modvx verification run. The FileManager is responsible for constructing paths to forecast and observation files based on the provided configuration and temporal identifiers, loading verification-domain masks, and managing an in-memory and disk-based cache for intermediate results such as remapped forecast accumulations. By encapsulating all file-related logic within this class, we ensure a clean separation of concerns and provide a single point of maintenance for any future changes to file handling or caching strategies. The FileManager also includes utility methods for grouping observation times by their corresponding daily files and mapping observation end-times to their appropriate indices within those files, facilitating efficient loading of observation data for multi-hour accumulation windows.
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -33,17 +33,12 @@ _ALL_METRIC_KEYS: list[str] = ["fss", "pod", "far", "csi", "fbias", "ets"]
 
 
 class FileManager:
-    """
-    Centralise all filesystem operations for a modvx verification run. Responsibilities include locating forecast and observation files, loading and caching data with both in-memory and shared disk layers, writing intermediate debug fields as NetCDF, and persisting FSS results. The class is designed to be instantiated once per process and reused across all valid times in a cycle, allowing the in-memory observation cache to reduce redundant file reads.
+    """ Centralise all filesystem operations for a modvx verification run. """
 
-    Parameters:
-        config (ModvxConfig): Run configuration with directory paths, filename templates, and variable names.
-    """
-
-
-    def __init__(self, config: ModvxConfig) -> None:
+    def __init__(self: "FileManager", 
+                 config: ModvxConfig) -> None:
         """
-        This initialization method sets up the FileManager with the provided configuration, initializing in-memory caches for observations and forecasts, and ensuring that a shared disk cache directory is available for multiprocessing workers to share intermediate results. The configuration is stored as an instance attribute for use in path construction, loading, and caching operations throughout the verification workflow.
+        This initializer sets up the FileManager with the necessary configuration for file handling and caching. The provided ModvxConfig object contains all relevant settings such as directory paths, filename templates, and variable names, which will be used in constructing paths to forecast and observation files, loading masks, and managing caches. The initializer also initializes in-memory cache dictionaries for observations and forecasts, and ensures that the shared disk cache directory exists if it is configured. By storing the configuration as an instance variable, we ensure that all methods within the FileManager have access to consistent parameters for constructing file paths and managing caches according to the user's specifications. 
 
         Parameters:
             config (ModvxConfig): Run configuration with directory paths, filename templates, and variable names.
@@ -67,13 +62,11 @@ class FileManager:
             )
 
 
-    def get_forecast_filepath(
-        self,
-        valid_time: datetime.datetime,
-        init_string: str,
-    ) -> str:
+    def get_forecast_filepath(self: "FileManager",
+                              valid_time: datetime.datetime,
+                              init_string: str,) -> str:
         """
-        Construct the full filesystem path to a native MPAS diagnostic file. MPAS diag files are organised under the experiment directory in an ``ExtendedFC/<init_string>/`` subdirectory, named using the valid-time timestamp with second precision (e.g. ``diag.2024-09-17_01.00.00.nc``). The path is built from the configured forecast directory, experiment name, and the provided temporal identifiers without any filesystem access.
+        This method constructs the full path to an MPAS diag NetCDF file for a given forecast valid time and cycle initialisation string. The path is built based on the configured directory structure and filename template, which typically includes the experiment name, cycle information, and a timestamp derived from the valid time. The method formats the valid time into a string suitable for the filename and combines it with the initialisation string to produce the final path. This allows for consistent and flexible access to forecast files across different experiments and cycles without hardcoding specific paths. 
 
         Parameters:
             valid_time (datetime.datetime): Forecast valid time, used to format the filename.
@@ -98,9 +91,10 @@ class FileManager:
         )
 
 
-    def get_observation_filepath(self, date_key: str) -> str:
+    def get_observation_filepath(self: "FileManager", 
+                                 date_key: str) -> str:
         """
-        Resolve the path to a FIMERG daily observation NetCDF file for a given date. The function iterates through the configured vintage preference list (e.g. FNL, LTE) and returns the path to the first file that actually exists on disk. This allows graceful fallback when the preferred final-run data is not yet available. If no qualifying vintage is found, the first-preference path is returned and a FileNotFoundError will be raised at load time.
+        This method constructs the full path to a FIMERG daily NetCDF file for a given date key in ``YYYYmmdd`` format. It resolves the base observation directory from the configuration and iterates through the list of vintage preferences to check for the existence of files corresponding to each vintage. The method returns the path to the first existing file it finds, allowing for flexible handling of multiple vintages without hardcoding specific paths. If no files are found for any vintage, it returns the path corresponding to the first vintage in the preference list, which will likely result in a FileNotFoundError when accessed, signaling that the expected observation file is missing. 
 
         Parameters:
             date_key (str): Date string in ``YYYYmmdd`` format (e.g. ``"20240917"``).
@@ -115,24 +109,24 @@ class FileManager:
         for vintage in self.config.obs_vintage_preference:
             path = (
                 f"{obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000."
-                f"E{date_key}T235959.{vintage}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc"
+                f"E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc"
             )
 
             # If the path exists, return it immediately
             if os.path.exists(path):
                 return path
         
-        # Return the full path to the observation file 
+        # Return the full path to the observation file corresponding to the first vintage in the preference list
         return (
             f"{obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000."
-            f"E{date_key}T235959.{self.config.obs_vintage_preference[0]}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc"
+            f"E{date_key}T235959.{self.config.obs_vintage_preference[0]}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc"
         )
 
 
     @staticmethod
     def get_observation_hour_index(time: datetime.datetime) -> int:
         """
-        Map a FIMERG observation end-time to its zero-based hour index within the daily file. FIMERG daily files contain 24 hourly accumulation slices indexed 0–23, where index 0 corresponds to the hour ending at 01:00 UTC (covering 00:00–01:00) and index 23 corresponds to the hour ending at 00:00 UTC the following day (covering 23:00–00:00). This offset convention means that midnight (00:00) maps to index 23 rather than 0.
+        This static method maps an observation end-time to the corresponding zero-based time index (0–23) used in the FIMERG daily NetCDF files. FIMERG files use an end-of-hour timestamp convention, where the value at hour 0 (00:00 UTC) corresponds to the accumulation from the previous day, and values at hours 1–23 correspond to accumulations ending at those hours on the same day. Therefore, if the input time is at midnight (00:00), the method returns index 23 to access the previous day's final accumulation. For all other hours, it returns time.hour - 1 to align with FIMERG's indexing. This mapping is essential for correctly extracting hourly observations from the daily files based on their end-times. 
 
         Parameters:
             time (datetime.datetime): Observation end-time to convert to a file index.
@@ -145,13 +139,11 @@ class FileManager:
 
 
     @staticmethod
-    def group_observation_times_by_date(
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-        obs_interval: datetime.timedelta,
-    ) -> Dict[str, List[datetime.datetime]]:
+    def group_observation_times_by_date(start_time: datetime.datetime,
+                                        end_time: datetime.datetime,
+                                        obs_interval: datetime.timedelta,) -> Dict[str, List[datetime.datetime]]:
         """
-        Group a sequence of hourly observation end-times by their corresponding daily FIMERG file. The function iterates from *start_time* to *end_time* inclusive at *obs_interval* steps, assigning each time to the appropriate date key. Times at midnight (00:00 UTC) are assigned to the previous calendar day's file, consistent with FIMERG's end-of-hour timestamp convention. The result allows loading each daily file exactly once when accumulating observations over a multi-hour window.
+        This static method groups a sequence of observation end-times by their corresponding daily FIMERG file. It iterates from *start_time* to *end_time* inclusive at *obs_interval* steps, assigning each time to the appropriate date key. Times at midnight (00:00 UTC) are assigned to the previous calendar day's file, consistent with FIMERG's end-of-hour timestamp convention. The result allows loading each daily file exactly once when accumulating observations over a multi-hour window.
 
         Parameters:
             start_time (datetime.datetime): First observation end-time to include (inclusive).
@@ -186,9 +178,10 @@ class FileManager:
         return times_by_date
 
 
-    def load_region_mask(self, mask_filepath: str) -> Tuple[xr.DataArray, str]:
+    def load_region_mask(self: "FileManager", 
+                         mask_filepath: str) -> Tuple[xr.DataArray, str]:
         """
-        Load a binary verification-domain mask from a NetCDF file. After opening, dimension names are standardised to ``latitude``/``longitude`` and longitudes are converted to the [0, 360] convention for consistency with observation data. The first non-coordinate variable in the file is treated as the mask variable. Raises descriptive errors when the file is missing or does not contain a suitable mask variable.
+        This method loads a verification-domain mask from a specified NetCDF file path. It first checks if the file exists and raises a FileNotFoundError if it does not. The method then reads the dataset using xarray and identifies the first non-coordinate variable to use as the mask variable. It standardizes the coordinate names to latitude and longitude, normalizes longitudes to the [0, 360] convention, and logs the number of valid (non-zero) points in the mask for debugging purposes. Finally, it returns the mask as an xarray DataArray along with the variable name used for the mask. This allows for flexible handling of different mask files while ensuring that the resulting mask is in a consistent format for subsequent processing steps. 
 
         Parameters:
             mask_filepath (str): Full path to the mask NetCDF file.
@@ -236,11 +229,11 @@ class FileManager:
         return mask, var_name
 
 
-    def _forecast_cache_key(
-        self, init_string: str, valid_time: datetime.datetime,
-    ) -> str:
+    def _forecast_cache_key(self: "FileManager", 
+                            init_string: str, 
+                            valid_time: datetime.datetime,) -> str:
         """
-        Generate a deterministic cache key for a forecast accumulation field that is unique per experiment. The key encodes the experiment name, cycle initialisation string, valid time, and forecast step duration so that different experiments running over the same verification period never share a cache entry. Without the experiment name, a cache written by one experiment could be silently reused by a subsequent experiment with the same cycle and valid-time range, producing identical (incorrect) scores for every experiment after the first.
+        This internal helper method generates a deterministic cache key string for storing and retrieving accumulated forecast DataArrays based on the cycle initialisation string, valid time, and forecast step duration. The key is constructed in the format ``"fcst_accum_<expname>_<init>_<validtime>_<N>h"`` where <expname> is the experiment name from the configuration, <init> is the cycle initialisation string, <validtime> is the valid time formatted as ``YYYYmmddHH``, and <N> is the forecast step duration in hours. This consistent key format allows for efficient caching of intermediate results across different runs and processes while ensuring that keys are unique to specific forecast accumulations. 
 
         Parameters:
             init_string (str): Cycle initialisation string in ``YYYYmmddHH`` format.
@@ -259,15 +252,15 @@ class FileManager:
         return f"fcst_accum_{experiment_name}_{init_string}_{valid_time.strftime('%Y%m%d%H')}_{step_h}h"
 
 
-    def _load_cache_entry(
-        self, key: str, in_memory_cache: Dict[str, xr.DataArray],
-    ) -> Optional[xr.DataArray]:
+    def _load_cache_entry(self: "FileManager", 
+                          key: str, 
+                          in_memory_cache: Dict[str, xr.DataArray],) -> Optional[xr.DataArray]:
         """
-        This helper checks both the in-memory cache dict and the shared disk cache directory for a cached DataArray corresponding to the provided key. It first looks up the key in the in-memory dict, returning the cached DataArray if found. If not present in memory, it checks if a NetCDF file with the key name exists in the shared disk cache directory. If such a file exists, it loads the DataArray from disk, stores it in the in-memory cache for future quick access, and returns it. If the key is not found in either cache layer, the method returns None, indicating that the caller needs to compute and cache the value.
+        This internal helper method attempts to load a cached DataArray from either the in-memory cache dict or the shared disk cache directory based on the provided key. It first checks the in-memory cache for the key and returns the cached DataArray if found. If not found in memory, it constructs the expected disk cache file path using the key and checks if it exists. If a disk cache file is found, it loads the dataset using xarray, extracts the first data variable as the cached DataArray, stores it in the in-memory cache for future access, and returns it. If the key is not found in either cache, it returns None to indicate a cache miss. This method allows for efficient retrieval of intermediate results while minimizing redundant computations across processes. 
 
         Parameters:
             key (str): Cache key string to lookup.
-            mem_cache (Dict[str, xarray.DataArray]): In-memory cache mapping.
+            in_memory_cache (Dict[str, xarray.DataArray]): In-memory cache mapping.
 
         Returns:
             Optional[xarray.DataArray]: Cached DataArray if found, otherwise ``None``.
@@ -304,16 +297,17 @@ class FileManager:
         return None
 
 
-    def _save_cache_entry(
-        self, key: str, data_array: xr.DataArray, in_memory_cache: Dict[str, xr.DataArray],
-    ) -> None:
+    def _save_cache_entry(self: "FileManager", 
+                          key: str, 
+                          data_array: xr.DataArray, 
+                          in_memory_cache: Dict[str, xr.DataArray],) -> None:
         """
-        This helper saves a DataArray to both the in-memory cache dict and the shared disk cache directory under a filename derived from the provided key. It first stores the DataArray in the in-memory dict for fast access within the current process. If a shared disk cache directory is configured, it then writes the DataArray to a NetCDF file named ``{key}.nc`` within that directory. The method ensures that the cache directory exists and uses an atomic file write (write to a temp file and rename
+        This internal helper method saves a DataArray to both the in-memory cache dict and the shared disk cache directory under the provided key. It first stores the DataArray in the in-memory cache for quick access during the current run. If a disk cache directory is configured, it ensures that the directory exists, constructs a temporary file path for atomic writing, saves the DataArray to a NetCDF file at the temporary path, and then moves it to the final disk cache path corresponding to the key. This approach minimizes the risk of corrupted cache files due to concurrent writes and allows for efficient caching of intermediate results across processes. The method logs the cache save operation for debugging purposes but does not return any value.
 
         Parameters:
             key (str): Cache key under which to store the DataArray.
-            da (xarray.DataArray): DataArray to persist.
-            mem_cache (Dict[str, xarray.DataArray]): In-memory cache mapping.
+            data_array (xarray.DataArray): DataArray to persist.
+            in_memory_cache (Dict[str, xarray.DataArray]): In-memory cache mapping.
 
         Returns:
             None
@@ -344,11 +338,11 @@ class FileManager:
             logger.debug("Cached to disk: %s", disk_path)
 
 
-    def _compute_forecast_accumulation(
-        self, valid_time: datetime.datetime, init_string: str,
-    ) -> xr.DataArray:
+    def _compute_forecast_accumulation(self: "FileManager", 
+                                       valid_time: datetime.datetime, 
+                                       init_string: str,) -> xr.DataArray:
         """
-        This internal method performs the actual computation of accumulated precipitation from MPAS diag files without any caching. It loads the cumulative precipitation at the start and end of the accumulation window, computes the difference to get the accumulation over the forecast step, and then remaps the result from the native MPAS mesh to a regular lat-lon grid using mpasdiag's remapping utilities. The method assumes that the input valid_time and init_string are valid and that the corresponding MPAS diag files exist; it does not handle any exceptions related to missing files or data.
+        This internal helper method computes the accumulated precipitation for a single forecast step by loading the cumulative precipitation fields from the start and end of the accumulation window from MPAS diag files, calculating the difference to get the accumulation over the forecast step, and remapping the result from the native MPAS mesh to a regular lat-lon grid at the configured resolution. It retrieves the necessary configuration parameters for path construction and remapping, resolves the grid file path for loading coordinate information, calculates the appropriate start and end file paths based on the valid time and forecast step, and logs the files being used for debugging. After loading the start and end precipitation fields, it computes the accumulation by subtraction, updates metadata, performs remapping using the mpasdiag library, and logs the successful computation before returning the remapped accumulated precipitation as an xarray DataArray. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the accumulation window.
@@ -409,13 +403,11 @@ class FileManager:
         return remapped_da
 
 
-    def accumulate_forecasts(
-        self,
-        valid_time: datetime.datetime,
-        init_string: str,
-    ) -> xr.DataArray:
+    def accumulate_forecasts(self: "FileManager",
+                             valid_time: datetime.datetime,
+                             init_string: str,) -> xr.DataArray:
         """
-        Compute accumulated precipitation for one forecast step from native MPAS diag files. MPAS diag files store cumulative ``rainc`` and ``rainnc`` from model initialisation, so the accumulation for a window is computed by subtracting the value at the window start from the value at the window end. The result is then remapped from the native unstructured MPAS mesh to a regular lat-lon grid at the configured resolution using the ``mpasdiag`` library.
+        This method computes the accumulated precipitation for a single forecast step by first checking the in-memory and disk caches for a pre-computed result using a key that encodes the valid time and forecast step. If a cached result is found, it is returned immediately. If not found in cache, it calls the internal helper method to compute the accumulation from MPAS diag files, saves the result to both caches for future access, and returns the computed DataArray. This method serves as the main entry point for obtaining forecast accumulations while leveraging caching to optimize performance across runs and processes. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the accumulation window (window end = valid_time + forecast_step).
@@ -444,13 +436,11 @@ class FileManager:
         return remapped
 
 
-    def accumulate_forecasts_precip_accum(
-        self,
-        valid_time: datetime.datetime,
-        init_string: str,
-    ) -> xr.DataArray:
+    def accumulate_forecasts_precip_accum(self: "FileManager",
+                                          valid_time: datetime.datetime,
+                                          init_string: str,) -> xr.DataArray:
         """
-        Compute accumulated precipitation over the configured ``precip_accum_hours`` window by summing individual forecast-step accumulations. When ``precip_accum_hours`` equals ``forecast_step_hours``, this delegates directly to :meth:`accumulate_forecasts`. Otherwise, it sums N = effective_precip_accum_hours / forecast_step_hours individually remapped forecast-step accumulations. Results are cached using a key that encodes the accumulation period.
+        This method computes the accumulated precipitation over the effective accumulation period defined in the configuration by summing multiple single-step accumulations if necessary. If the effective accumulation period equals the forecast step, it delegates directly to the single-step accumulation method. Otherwise, it generates a cache key for the full-window accumulation and checks both caches for a pre-computed result. If found, it returns the cached result immediately. If not found, it calculates the number of forecast steps to accumulate based on the effective accumulation hours and forecast step hours, iteratively computes each sub-step accumulation using the existing method, sums them to get the total accumulation, updates metadata, saves the total to both caches, and returns it. This method allows for flexible handling of multi-hour accumulations while maximizing cache reuse of single-step results. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the multi-step accumulation window.
@@ -522,9 +512,10 @@ class FileManager:
         return total
 
 
-    def _observation_cache_key(self, valid_time: datetime.datetime) -> str:
+    def _observation_cache_key(self: "FileManager", 
+                               valid_time: datetime.datetime) -> str:
         """
-        Generate a deterministic string cache key for an accumulated observation field. The key encodes the valid time and forecast step duration, ensuring that cache entries are unique per (valid_time, accumulation_length) combination. The same key is used to check both the in-memory dict cache and the shared disk cache directory, making it straightforward to coordinate cache reads across workers.
+        This internal helper method generates a deterministic cache key string for storing and retrieving accumulated observation DataArrays based on the valid time and forecast step duration. The key is constructed in the format ``"obs_accum_<YYYYmmddHH>_<N>h"`` where <YYYYmmddHH> is the valid time formatted as ``YYYYmmddHH`` and <N> is the forecast step duration in hours. This consistent key format allows for efficient caching of intermediate results across different runs and processes while ensuring that keys are unique to specific observation accumulations. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the observation accumulation window.
@@ -539,12 +530,10 @@ class FileManager:
         return f"obs_accum_{valid_time.strftime('%Y%m%d%H')}_{step_h}h"
 
 
-    def accumulate_observations(
-        self,
-        valid_time: datetime.datetime,
-    ) -> xr.DataArray:
+    def accumulate_observations(self: "FileManager",
+                                valid_time: datetime.datetime,) -> xr.DataArray:
         """
-        Load and accumulate FIMERG observation data with multi-level caching. Three cache layers are checked in order: (1) an in-memory dict per process, which avoids re-loading data when the same valid time appears in multiple cycles; (2) a shared disk cache directory containing pre-computed NetCDF files, which allows multiprocessing workers to share work; and (3) the original FIMERG daily source files as the final fallback. Successfully loaded data is stored in both cache layers for future use.
+        This method loads and accumulates FIMERG observation data over a single forecast step by first checking the in-memory and disk caches for a pre-computed result using a key that encodes the valid time and forecast step. If a cached result is found, it is returned immediately. If not found in cache, it calls the internal helper method to compute the accumulation from FIMERG files, saves the result to both caches for future access, and returns the computed DataArray. This method serves as the main entry point for obtaining single-step observation accumulations while leveraging caching to optimize performance across runs and processes. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the accumulation window, aligned with the forecast valid time.
@@ -572,12 +561,10 @@ class FileManager:
         return accumulated_da
 
 
-    def accumulate_observations_precip_accum(
-        self,
-        valid_time: datetime.datetime,
-    ) -> xr.DataArray:
+    def accumulate_observations_precip_accum(self: "FileManager",
+                                             valid_time: datetime.datetime,) -> xr.DataArray:
         """
-        Load and accumulate FIMERG observation data over the configured ``precip_accum_hours`` window. When ``precip_accum_hours`` equals ``forecast_step_hours``, this delegates directly to :meth:`accumulate_observations`. Otherwise, it sums hourly observation slices from ``valid_time + obs_interval`` to ``valid_time + precip_accum``. Results are cached using a key that encodes the accumulation period.
+        This method computes the accumulated precipitation from FIMERG observations over the effective accumulation period defined in the configuration by summing multiple single-step accumulations if necessary. If the effective accumulation period equals the forecast step, it delegates directly to the single-step accumulation method. Otherwise, it generates a cache key for the full-window accumulation and checks both caches for a pre-computed result. If found, it returns the cached result immediately. If not found, it calculates the start and end times of the accumulation window based on the valid time and configuration parameters, groups the required observation end-times by their corresponding daily files to minimize file I/O, iteratively loads and sums the relevant hourly slices from each daily file, asserts that at least one slice was accumulated to catch data gaps, updates metadata, saves the total to both caches, and returns it. This method allows for flexible handling of multi-hour observation accumulations while maximizing cache reuse of single-step results. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the observation accumulation window.
@@ -666,12 +653,10 @@ class FileManager:
         return accumulated_da
 
 
-    def _compute_observation_accumulation_raw(
-        self,
-        valid_time: datetime.datetime,
-    ) -> xr.DataArray:
+    def _compute_observation_accumulation_raw(self: "FileManager",
+                                              valid_time: datetime.datetime,) -> xr.DataArray:
         """
-        Load and sum hourly FIMERG observation slices over one forecast step from source files. This internal method performs the actual file I/O without any caching, making it the fallback called by accumulate_observations when no cached result is available. Hourly slices are grouped by daily file to minimise the number of NetCDF files opened. The method asserts that at least one observation slice was accumulated to catch silent data gaps early.
+        This internal helper method computes the accumulated precipitation from FIMERG observations over a single forecast step by loading the relevant hourly slices from the daily NetCDF files based on the valid time and summing them. It calculates the start and end times of the accumulation window, groups the required observation end-times by their corresponding daily files to minimize file I/O, iteratively loads and sums the relevant hourly slices from each daily file, asserts that at least one slice was accumulated to catch data gaps, logs the number of slices accumulated for debugging purposes, and returns the total accumulated observation as an xarray DataArray. This method does not perform any caching and serves as the core computation for obtaining raw observation accumulations when no cached result is available. 
 
         Parameters:
             valid_time (datetime.datetime): Start of the accumulation window (window end = valid_time + forecast_step).
@@ -737,15 +722,13 @@ class FileManager:
         return accumulated_da
 
 
-    def save_intermediate_precip(
-        self,
-        forecast_da: xr.DataArray,
-        observation_da: xr.DataArray,
-        cycle_start: datetime.datetime,
-        valid_time: datetime.datetime,
-    ) -> None:
+    def save_intermediate_precip(self: "FileManager",
+                                 forecast_da: xr.DataArray,
+                                 observation_da: xr.DataArray,
+                                 cycle_start: datetime.datetime,
+                                 valid_time: datetime.datetime,) -> None:
         """
-        Save regridded and masked forecast and observation precipitation fields to a debug NetCDF. The output file contains three variables: ``forecast``, ``observation``, and ``difference``, each with a time dimension encoded as seconds since the Unix epoch. Files are written to a per-cycle subdirectory under the configured debug directory and are only produced when the ``save_intermediate`` flag is enabled. zlib compression is applied at the configured level to minimise disk usage.
+        This method saves the intermediate forecast and observation precipitation fields for a specific valid time to a debug NetCDF file. The output file contains three variables: ``forecast``, ``observation``, and their difference ``difference``. The files are named using the valid-time string and written to a per-cycle precip subdirectory under the debug directory. This output is only produced when the ``save_intermediate`` flag is enabled in the configuration and can be used for debugging and verification of the accumulation and remapping processes. 
 
         Parameters:
             forecast_da (xr.DataArray): Regridded and masked forecast precipitation field.
@@ -818,16 +801,14 @@ class FileManager:
         logger.debug("Wrote intermediate precip: %s", out)
 
 
-    def save_intermediate_binary(
-        self,
-        forecast_binary: xr.DataArray,
-        observation_binary: xr.DataArray,
-        cycle_start: datetime.datetime,
-        valid_time: datetime.datetime,
-        threshold: float,
-    ) -> None:
+    def save_intermediate_binary(self: "FileManager",
+                                 forecast_binary: xr.DataArray,
+                                 observation_binary: xr.DataArray,
+                                 cycle_start: datetime.datetime,
+                                 valid_time: datetime.datetime,
+                                 threshold: float,) -> None:
         """
-        Save binary exceedance mask fields to a debug NetCDF file for a specific threshold. The output file contains two variables, ``forecast_binary`` and ``observation_binary``, representing the 0/1/NaN exceedance masks produced by PerfMetrics.generate_binary_mask. Files are named using the threshold value and valid-time string and written to a per-cycle binary subdirectory under the debug directory. This output is only produced when the ``save_intermediate`` flag is enabled in the configuration.
+        This method saves the intermediate binary exceedance masks for the forecast and observation fields for a specific valid time to a debug NetCDF file. The output file contains two variables: ``forecast_binary`` and ``observation_binary``, which are binary masks indicating exceedance of the specified threshold (values 0.0, 1.0, or NaN). The files are named using the valid-time string and threshold information, and written to a per-cycle binary subdirectory under the debug directory. This output is only produced when the ``save_intermediate`` flag is enabled in the configuration and can be used for debugging and verification of the thresholding process. 
 
         Parameters:
             forecast_binary (xr.DataArray): Binary exceedance mask for the forecast field (values 0.0, 1.0, or NaN).
@@ -903,16 +884,14 @@ class FileManager:
         logger.debug("Wrote intermediate binary: %s", out)
 
 
-    def save_fss_results(
-        self,
-        metrics_list: List[Dict[str, float]],
-        cycle_start: datetime.datetime,
-        region_name: str,
-        threshold: float,
-        window_size: int,
-    ) -> None:
+    def save_fss_results(self: "FileManager",
+                         metrics_list: List[Dict[str, float]],
+                         cycle_start: datetime.datetime,
+                         region_name: str,
+                         threshold: float,
+                         window_size: int,) -> None:
         """
-        Persist FSS metrics for a single (cycle, region, threshold, window) combination. Each element of metrics_list is a dictionary containing ``fss`` for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name, threshold percentile, and window size. All metric arrays are stored as variables inside a single NetCDF dataset so that extract_fss_to_csv can reconstruct the full record.
+        This method persists FSS metrics for a single (cycle, region, threshold, window_size) combination. Each element of metrics_list is a dictionary containing ``fss``, ``pod``, ``far``, ``csi``, ``fbias``, and ``ets`` for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name, threshold percentile, and window size. 
 
         Parameters:
             metrics_list (list of Dict[str, float]): One metrics dictionary per valid time, each containing keys ``fss``, ``pod``, ``far``, ``csi``, ``fbias``, ``ets``.
@@ -983,15 +962,13 @@ class FileManager:
         logger.info("Saved metrics → %s", out)
 
 
-    def save_contingency_results(
-        self,
-        metrics_list: List[Dict[str, float]],
-        cycle_start: datetime.datetime,
-        region_name: str,
-        threshold: float,
-    ) -> None:
+    def save_contingency_results(self: "FileManager",
+                                 metrics_list: List[Dict[str, float]],
+                                 cycle_start: datetime.datetime,
+                                 region_name: str,
+                                 threshold: float,) -> None:
         """
-        Persist contingency metrics for a single (cycle, region, threshold) combination. Each element of metrics_list is a dictionary containing ``pod``, ``far``, ``csi``, ``fbias``, and ``ets`` for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name and threshold percentile (no window size).
+        This method persists contingency table metrics for a single (cycle, region, threshold) combination. Each element of metrics_list is a dictionary containing ``pod``, ``far``, ``csi``, ``fbias``, and ``ets`` for one valid time. Files are written to the output directory hierarchy under ``<output_dir>/<experiment>/ExtendedFC/<init_string>/pp<step>h/`` with a standardised filename encoding the region name and threshold percentile. 
 
         Parameters:
             metrics_list (list of Dict[str, float]): One metrics dictionary per valid time, each containing keys ``pod``, ``far``, ``csi``, ``fbias``, ``ets``.
@@ -1064,7 +1041,7 @@ class FileManager:
     @staticmethod
     def _extract_file_context(nc_file: str) -> Optional[tuple[str, str]]:
         """
-        This helper function extracts the experiment name and init_time from a given FSS NetCDF file path. It looks for the "output" directory in the path, then assumes the next segment is the experiment name. It also searches for a segment matching a 10-digit pattern (YYYYmmddHH) to identify the init_time. If both pieces of information are successfully extracted, it returns them as a tuple; otherwise, it returns None to indicate that the file does not conform to the expected structure.
+        This static helper function attempts to extract the experiment name and initialization time from the file path of a FSS NetCDF file. It does this by splitting the file path into its components, identifying the segment following the "output" directory as the experiment name, and searching for a segment that matches the pattern of 10 digits (YYYYmmddHH) to identify the initialization time. If both pieces of information are successfully extracted, it returns them as a tuple. If the expected patterns are not found in the file path, it returns None to indicate that the context could not be parsed. 
 
         Parameters:
             nc_file (str): Full path to a FSS NetCDF file.
@@ -1098,11 +1075,10 @@ class FileManager:
 
 
     @staticmethod
-    def _parse_metric_values(
-        ds: xr.Dataset, metric_keys: List[str],
-    ) -> tuple[int, Dict[str, Any]]:
+    def _parse_metric_values(ds: xr.Dataset, 
+                             metric_keys: List[str],) -> tuple[int, Dict[str, Any]]:
         """
-        This helper function extracts metric values from an xarray Dataset based on a list of expected metric keys. It first determines the length of the records by checking the length of the first available metric variable in the dataset. Then, for each expected metric key, it attempts to extract the corresponding values from the dataset. If a key is missing, it fills in an array of NaN values with the same length as the records. The function returns both the determined length and a dictionary mapping each metric key to its extracted values or NaN arrays.
+        This static helper function extracts metric values from an opened xarray Dataset based on a list of expected metric keys. It first determines the length of the records by checking the first available metric variable in the dataset, or falling back to any available variable if the expected keys are not present. Then, it iterates over the list of expected metric keys and attempts to extract their values from the dataset, filling in NaN for any missing keys. The result is a tuple containing the determined length of the records and a dictionary mapping each expected metric key to its corresponding array of values (or NaN if missing). This function provides a consistent way to extract metrics while handling cases where some expected variables may be absent from the dataset. 
 
         Parameters:
             ds (xarray.Dataset): Opened NetCDF dataset.
@@ -1139,9 +1115,10 @@ class FileManager:
         return length, metric_values
 
 
-    def _parse_records_from_nc_file(self, nc_file: str) -> Optional[tuple[str, List[Dict]]]:
+    def _parse_records_from_nc_file(self: "FileManager", 
+                                    nc_file: str) -> Optional[tuple[str, List[Dict]]]:
         """
-        This method parses a single FSS NetCDF file to extract the experiment name, init_time, lead_time, and metric values for each valid time index. It uses helper functions to extract context from the filename and read metric values from the dataset. The result is a list of dictionaries, each representing a record with keys for initTime, leadTime, domain, thresh, window, and all metrics. If any step of the parsing fails (e.g. missing expected variables or filename patterns), the method returns None to indicate that the file could not be processed.
+        This internal helper method takes the path to a FSS NetCDF file, extracts the experiment name and initialization time from the file path, determines the type of metrics contained in the file (FSS or contingency), parses the metric values from the dataset, and constructs a list of metric record dictionaries containing all relevant information for each valid time index. Each record dictionary includes keys for initTime, leadTime, domain, thresh, window, and all metric values (fss, pod, far, csi, fbias, ets) with NaN for any missing metrics. The method returns a tuple of the experiment name and the list of metric records on success. If any step of the parsing process fails (e.g. unable to extract context from the file path, missing expected metadata patterns in the filename), it returns None to indicate that this file should be skipped. This function serves as a core component for reading and interpreting FSS NetCDF files into a structured format for further processing and CSV output. 
 
         Parameters:
             nc_file (str): Path to the FSS NetCDF file to parse.
@@ -1233,11 +1210,12 @@ class FileManager:
         return experiment, records
 
 
-    def _write_experiment_csv(
-        self, experiment: str, records: List[Dict], csv_dir: str,
-    ) -> None:
+    def _write_experiment_csv(self: "FileManager", 
+                              experiment: str, 
+                              records: List[Dict], 
+                              csv_dir: str,) -> None:
         """
-        This method takes a list of metric record dictionaries for a single experiment and writes them to a CSV file in the specified directory. It uses pandas to create a DataFrame from the records, sorts it by initTime, leadTime, domain, thresh, and window for consistent ordering, and then writes it to a CSV file named ``<experiment>.csv``. The method logs the number of records written and the path to the output file.
+        This internal helper method takes an experiment name, a list of metric record dictionaries, and a directory path, and writes the records to a CSV file named ``<experiment>.csv`` in the specified directory. It uses pandas to create a DataFrame from the list of dictionaries, sorts the records by initTime, leadTime, domain, thresh, and window for consistent ordering, and writes the DataFrame to a CSV file without the index column. After writing the file, it logs the successful write operation along with the number of records written for debugging purposes. This function serves as a core component for outputting the parsed metric records into a structured CSV format for each experiment. 
 
         Parameters:
             experiment (str): Experiment name used to form the CSV filename.
@@ -1264,13 +1242,11 @@ class FileManager:
         logger.info("Wrote %s (%d records)", csv_path, len(results_df))
 
 
-    def extract_fss_to_csv(
-        self,
-        output_dir: Optional[str] = None,
-        csv_dir: Optional[str] = None,
-    ) -> None:
+    def extract_fss_to_csv(self: "FileManager",
+                           output_dir: Optional[str] = None,
+                           csv_dir: Optional[str] = None,) -> None:
         """
-        Scan the output directory tree for metrics NetCDF files and write one CSV per experiment. All NetCDF files matching the ``**/ExtendedFC/**/*.nc`` glob pattern are discovered, and their filenames are parsed to extract domain, threshold, and window metadata. Lead times are extracted from the directory path via extract_lead_time_hours. Results are aggregated into a pandas DataFrame per experiment and written to ``<csv_dir>/<experiment>.csv``.
+        This method orchestrates the extraction of FSS and contingency metrics from all relevant NetCDF files in the output directory hierarchy and writes them to CSV files for each experiment. It uses glob to recursively find all NetCDF files that match the expected pattern for FSS results, attempts to parse each file to extract the experiment name and metric records, aggregates the records by experiment, and then writes one CSV file per experiment containing all the parsed records. The method handles any exceptions during file parsing gracefully by logging a warning and skipping the problematic file, ensuring that one bad file does not disrupt the entire extraction process. This function serves as a convenient way to convert the structured NetCDF outputs of the verification process into a more accessible CSV format for analysis and reporting. 
 
         Parameters:
             output_dir (str, optional): Root output directory to scan; defaults to the configured output_dir.

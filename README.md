@@ -39,25 +39,25 @@ pip install -e MPASdiag
 modvx run -c configs/default.yaml --vxdomain GLOBAL
 
 # Run FSS computation with multiprocessing backend
-modvx run -c configs/bench_liuz.yaml --vxdomain GLOBAL --backend multiprocessing --nprocs 12
+modvx run -c configs/test.yaml --vxdomain GLOBAL --backend multiprocessing --nprocs 12
 
 # Run with native MPAS mesh input (no convert-mpas needed)
-modvx run -c configs/mri_test.yaml --vxdomain GLOBAL
+modvx run -c configs/test.yaml --vxdomain GLOBAL
 
 # Extract results to CSV
-modvx extract-csv -c configs/mri_test.yaml
+modvx extract-csv -c configs/test.yaml
 
 # Generate plots for ALL metrics (fss, pod, far, csi, fbias, ets)
-modvx plot --all -c configs/mri_test.yaml
+modvx plot --all -c configs/test.yaml
 
 # Generate plots for specific metrics only
-modvx plot --all -c configs/mri_test.yaml --metric fss,pod,csi
+modvx plot --all -c configs/test.yaml --metric fss,pod,csi
 
 # Single plot for a specific metric, domain, threshold, window
-modvx plot -c configs/mri_test.yaml --domain GLOBAL --thresh 90 --window 3 --metric ets
+modvx plot -c configs/test.yaml --domain GLOBAL --thresh 90 --window 3 --metric ets
 
 # List available options
-modvx validate -c configs/mri_test.yaml
+modvx validate -c configs/test.yaml
 ```
 
 # YAML configuration
@@ -81,7 +81,7 @@ precip_accum_hours: 0          # hours over which to accumulate precip; set to 0
 # ---- MPAS mesh settings (leave mpas_grid_file empty for regular-grid input) ----
 
 mpas_grid_file: ""      # path to MPAS static grid file; empty = not an MPAS run
-mpas_remap_resolution: 0.1  # target lat-lon resolution after MPAS remapping (degrees)
+mpas_remap_resolution: 1.0  # target lat-lon resolution after MPAS remapping (degrees)
 
 # ---- grid / resolution --------------------------------------------------
 
@@ -148,7 +148,7 @@ debug_dir:  "debug"       # intermediate debug outputs
 # ---- filename templates -------------------------------------------------
 
 observation_template: >-
-  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc
+  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc
 
 obs_vintage_preference:  # tried in order; first file found on disk is used
   - "FNL"

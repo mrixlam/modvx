@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Performance metrics for modvx.
+Performance metrics for MODvx.
 
-This module defines the PerfMetrics class, which encapsulates the logic for computing performance metrics such as the Fractions Skill Score (FSS) across multiple forecast cycles, valid times, domains, thresholds, and window sizes. The compute_fss_batch method is designed to efficiently compute FSS for a batch of threshold-window combinations while minimizing redundant data loading. By centralizing metric computation in this class, we ensure consistent application of scoring algorithms and facilitate future extensions to additional metrics as needed. The class is used by the TaskManager to process each work unit, which may involve multiple threshold and window combinations for the same forecast and observation data, thus optimizing I/O operations across the verification workflow.
+This module contains the implementation of spatial verification metrics for forecast precipitation fields, including the Fractions Skill Score (FSS) and contingency-table-based metrics such as POD, FAR, CSI, FBIAS, and ETS. The PerfMetrics class provides methods to compute these metrics efficiently across multiple thresholds and window sizes while minimizing redundant data processing. The module is designed to handle xarray DataArrays with NaN values for out-of-domain masking and includes options to save intermediate binary masks for debugging purposes. By centralizing metric computations in this class, we ensure consistent application of scoring algorithms and facilitate future extensions to additional metrics as needed. The class is used by the TaskManager to process each work unit, which may involve multiple threshold and window combinations for the same forecast and observation data, thus optimizing I/O operations across the verification workflow. 
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -27,24 +27,27 @@ logger = logging.getLogger(__name__)
 
 
 class PerfMetrics:
-    """
-    Calculate spatial verification metrics for forecast precipitation fields. The primary metric implemented is the NaN-aware Fraction Skill Score (FSS), which quantifies the spatial accuracy of precipitation forecasts at varying neighbourhood scales and intensity thresholds. Contingency-table metrics (POD, FAR, CSI/TS, FBIAS, ETS) are also supported and computed from the same binary exceedance masks used by FSS. Additional point-wise metrics (RMSE, bias) are provided as static utility methods. Batch helpers compute FSS across (threshold × window) combinations and contingency metrics across thresholds.
+    """ Calculate spatial verification metrics for forecast precipitation fields. """
 
-    Parameters:
-        config (ModvxConfig): Run configuration with threshold lists, window sizes, and threshold mode settings.
-    """
+    def __init__(self: "PerfMetrics", 
+                 config: ModvxConfig) -> None:
+        """
+        This class encapsulates the computation of spatial verification metrics for forecast precipitation fields, including FSS and contingency-table-based metrics. The constructor takes a configuration object that contains thresholds, window sizes, and other settings needed for metric computation. By centralizing these computations in a class, we can efficiently reuse intermediate results (e.g. binary masks) across multiple metric calculations for the same forecast-observation pair, thus optimizing performance. 
 
-    def __init__(self, config: ModvxConfig) -> None:
+        Parameters:
+            config (ModvxConfig): Configuration object containing thresholds, window sizes, and other settings for metric computation.
+
+        Returns:
+            None
+        """
         self.config = config
 
 
     @staticmethod
-    def generate_binary_mask(
-        data: Union[xr.DataArray, np.ndarray],
-        threshold: float,
-    ) -> xr.DataArray:
+    def generate_binary_mask(data: Union[xr.DataArray, np.ndarray],
+                             threshold: float,) -> xr.DataArray:
         """
-        Create a binary 0/1/NaN exceedance mask from a precipitation field at a given threshold. Grid points where the value is greater than or equal to the threshold are set to 1.0, all other non-NaN points are set to 0.0, and NaN positions in the input are preserved as NaN in the output. Preserving NaNs is critical so that out-of-domain points do not silently contribute as zeros to FSS numerator or denominator calculations.
+        This helper generates a binary mask from the input precipitation field based on the specified threshold. Values greater than or equal to the threshold are set to 1.0, while values below the threshold are set to 0.0. The implementation preserves NaN values in the input, ensuring that out-of-domain points remain masked in the output. The resulting binary mask is returned as an xarray DataArray with the same coordinates, dimensions, and attributes as the input if it was an xarray DataArray; otherwise, it is returned as a new xarray DataArray with default coordinates and dimensions. 
 
         Parameters:
             data (xr.DataArray or np.ndarray): Input precipitation field, possibly containing NaN values.
@@ -71,12 +74,10 @@ class PerfMetrics:
 
 
     @staticmethod
-    def compute_fractional_field(
-        binary_mask: Union[xr.DataArray, np.ndarray],
-        window_size: int,
-    ) -> xr.DataArray:
+    def compute_fractional_field(binary_mask: Union[xr.DataArray, np.ndarray],
+                                 window_size: int,) -> xr.DataArray:
         """
-        Compute the local fraction of exceedance within a square neighbourhood for each grid point. A uniform (box-car) filter of side *window_size* is applied over the binary mask. The implementation is NaN-aware: the sum of valid values is divided by the count of valid neighbours rather than the full window area, preventing domain-edge dilution where parts of the window extend outside the verification region. NaN positions in the input are preserved as NaN in the output fractional field.
+        This helper computes the fractional coverage field from the input binary mask using a uniform filter to calculate the local mean within a square neighborhood defined by the window size. The implementation handles NaN values in the input binary mask by treating them as missing data; the uniform filter is applied to both the filled binary mask (where NaNs are replaced with 0) and a valid-data indicator mask (where valid points are 1 and NaNs are 0) to compute the sum of exceedances and the count of valid neighbors, respectively. The final fractional field is computed as the ratio of these two results, ensuring that any grid points that were NaN in the input remain NaN in the output. The resulting fractional coverage field is returned as an xarray DataArray with the same coordinates, dimensions, and attributes as the input if it was an xarray DataArray; otherwise, it is returned as a new xarray DataArray with default coordinates and dimensions. 
 
         Parameters:
             binary_mask (xr.DataArray or np.ndarray): Binary 0/1/NaN exceedance mask from generate_binary_mask.
@@ -126,9 +127,10 @@ class PerfMetrics:
 
 
     @staticmethod
-    def _get_quantile_value(arr: Union[xr.DataArray, np.ndarray], percentile: float) -> float:
+    def _get_quantile_value(arr: Union[xr.DataArray, np.ndarray], 
+                            percentile: float) -> float:
         """
-        This helper computes the specified percentile for a given input array, handling both xarray and NumPy inputs. For xarray DataArrays, the built-in quantile method is used, which is NaN-aware. For NumPy arrays, np.nanquantile is used to ignore NaN values in the computation. The result is returned as a float.
+        This helper computes the specified percentile value from the input array, supporting both xarray DataArrays and NumPy arrays. For xarray DataArrays, the quantile method is used, which handles NaN values appropriately. For NumPy arrays, np.nanquantile is used to ignore NaN values in the computation. The resulting percentile value is returned as a float. 
 
         Parameters:
             arr (xarray.DataArray or numpy.ndarray): Input array for which to compute the percentile
@@ -146,13 +148,11 @@ class PerfMetrics:
 
 
     @staticmethod
-    def _compute_percentile_thresholds(
-        forecast_da: Union[xr.DataArray, np.ndarray],
-        observation_da: Union[xr.DataArray, np.ndarray],
-        percentile: float,
-    ) -> Tuple[float, float]:
+    def _compute_percentile_thresholds(forecast_da: Union[xr.DataArray, np.ndarray],
+                                       observation_da: Union[xr.DataArray, np.ndarray],
+                                       percentile: float,) -> Tuple[float, float]:
         """
-        This helper computes the requested percentile for both the forecast and observation fields independently, returning a pair of numeric threshold values. Support is provided for both :class:`xarray.DataArray` and NumPy array inputs, using the appropriate quantile routine for each.
+        This helper computes the percentile thresholds independently for the forecast and observation fields. It uses the _get_quantile_value method to compute the specified percentile for each field, ensuring that NaN values are handled appropriately. The resulting thresholds for the forecast and observation are returned as a tuple of floats. 
 
         Parameters:
             forecast_da (xarray.DataArray or numpy.ndarray): Forecast field.
@@ -166,18 +166,16 @@ class PerfMetrics:
         return PerfMetrics._get_quantile_value(forecast_da, percentile), PerfMetrics._get_quantile_value(observation_da, percentile)
 
 
-    def _make_binary_masks(
-        self,
-        forecast_da: Union[xr.DataArray, np.ndarray],
-        observation_da: Union[xr.DataArray, np.ndarray],
-        percentile: float,
-        *,
-        save_intermediate: bool = False,
-        cycle_start: Optional[datetime.datetime] = None,
-        valid_time: Optional[datetime.datetime] = None,
-    ) -> Tuple[xr.DataArray, xr.DataArray]:
+    def _make_binary_masks(self: "PerfMetrics",
+                           forecast_da: Union[xr.DataArray, np.ndarray],
+                           observation_da: Union[xr.DataArray, np.ndarray],
+                           percentile: float,
+                           *,
+                           save_intermediate: bool = False,
+                           cycle_start: Optional[datetime.datetime] = None,
+                           valid_time: Optional[datetime.datetime] = None,) -> Tuple[xr.DataArray, xr.DataArray]:
         """
-        Percentile thresholds are computed independently for forecast and observation, and the corresponding binary masks (1.0 for exceedance, 0.0 otherwise, with NaNs preserved) are returned. When requested, the method also writes debug NetCDF files containing the binary masks to the debug directory using :class:`FileManager`.
+        This helper generates binary masks for both the forecast and observation fields based on independently computed percentile thresholds. It first computes the percentile thresholds for the forecast and observation fields using the _compute_percentile_thresholds method, then generates binary masks for each field using the generate_binary_mask method with their respective thresholds. If save_intermediate is True and cycle_start and valid_time are provided, the generated binary masks are saved as debug NetCDF files using the FileManager. Finally, the function returns a tuple containing the forecast and observation binary masks as xarray DataArrays. 
 
         Parameters:
             forecast_da (xarray.DataArray or numpy.ndarray): Forecast field.
@@ -211,11 +209,10 @@ class PerfMetrics:
 
 
     @staticmethod
-    def _fss_from_fractions(
-        forecast_fraction_field: xr.DataArray, observation_fraction_field: xr.DataArray,
-    ) -> float:
+    def _fss_from_fractions(forecast_fraction_field: xr.DataArray, 
+                            observation_fraction_field: xr.DataArray,) -> float:
         """
-        Given pre-computed fractional coverage fields for forecast and observation, this helper computes the mean-squared-error (MSE) and the reference MSE for no-skill, then returns the FSS defined as ``1 - MSE / MSE_ref``. A guard ensures that when ``MSE_ref`` is zero the function returns 0.0 to avoid division by zero.
+        This helper computes the Fraction Skill Score (FSS) from the forecast and observation fractional coverage fields. It calculates the mean squared error (MSE) between the forecast and observation fractional fields, ignoring NaN values. The reference MSE for no-skill is computed as the mean of the sum of squares of the forecast and observation fractional fields. The FSS is then calculated as 1 minus the ratio of the MSE to the reference MSE. If the reference MSE is zero, which can occur when both fields are identically zero, the function returns 0.0 to avoid division by zero and indicate no skill. 
 
         Parameters:
             fcst_frac (xarray.DataArray): Forecast fractional coverage field.
@@ -234,11 +231,11 @@ class PerfMetrics:
         return 1.0 - mean_sq_error / reference_mse if reference_mse > 0 else 0.0
 
 
-    def _compute_contingency_metrics(
-        self, forecast_binary_mask: xr.DataArray, observation_binary_mask: xr.DataArray,
-    ) -> Dict[str, float]:
+    def _compute_contingency_metrics(self: "PerfMetrics", 
+                                     forecast_binary_mask: xr.DataArray, 
+                                     observation_binary_mask: xr.DataArray,) -> Dict[str, float]:
         """
-        The function computes the contingency table and returns a dictionary containing POD, FAR, CSI, FBIAS and ETS derived from the hit/miss/false-alarm counts. The helper centralises these computations so that calling code can reuse the same contingency data across multiple window-size evaluations.
+        This helper computes contingency-table-based metrics (POD, FAR, CSI, FBIAS, ETS) from the provided forecast and observation binary masks. It first computes the contingency table using the compute_contingency_table method, which counts hits, misses, false alarms, correct negatives, and total valid points while handling NaN values appropriately. Then it calculates each metric using the corresponding static methods (pod, far, csi, fbias, ets) that take the contingency table as input. The results are returned as a dictionary mapping metric names to their computed values. 
 
         Parameters:
             fcst_bin (xarray.DataArray): Forecast binary exceedance mask.
@@ -260,20 +257,18 @@ class PerfMetrics:
         }
 
 
-    def calculate_fss(
-        self,
-        forecast_da: Union[xr.DataArray, np.ndarray],
-        observation_da: Union[xr.DataArray, np.ndarray],
-        percentile_threshold: float,
-        neighborhood_size: int,
-        *,
-        experiment_name: str = "",
-        cycle_start: Optional[datetime.datetime] = None,
-        valid_time: Optional[datetime.datetime] = None,
-        save_intermediate: bool = False,
-    ) -> float:
+    def calculate_fss(self: "PerfMetrics",
+                      forecast_da: Union[xr.DataArray, np.ndarray],
+                      observation_da: Union[xr.DataArray, np.ndarray],
+                      percentile_threshold: float,
+                      neighborhood_size: int,
+                      *,
+                      experiment_name: str = "",
+                      cycle_start: Optional[datetime.datetime] = None,
+                      valid_time: Optional[datetime.datetime] = None,
+                      save_intermediate: bool = False,) -> float:
         """
-        Calculate the Fraction Skill Score (FSS) for a single (threshold, window) combination. Percentile thresholds are computed independently for forecast and observation. Binary exceedance masks are generated, optionally saved as debug NetCDF files, and then used to compute fractional coverage fields via uniform filtering. FSS is defined as 1 − MSE/MSE_ref, where MSE_ref is the worst-case MSE under no spatial skill; returns 0.0 when MSE_ref is zero to avoid division-by-zero.
+        This method calculates the Fractions Skill Score (FSS) for a given forecast and observation pair at a specified percentile threshold and neighborhood size. It first generates binary masks for the forecast and observation fields based on independently computed percentile thresholds using the _make_binary_masks helper. Then it computes the fractional coverage fields for both forecast and observation using the compute_fractional_field helper. Finally, it calculates the FSS using the _fss_from_fractions helper, which computes the mean squared error between the forecast and observation fractional fields and normalizes it by the reference MSE for no-skill. The computed FSS value is logged along with the threshold and window size for traceability before being returned. 
 
         Parameters:
             forecast_da (xr.DataArray or np.ndarray): Co-located, masked forecast field.
@@ -315,12 +310,10 @@ class PerfMetrics:
 
 
     @staticmethod
-    def compute_contingency_table(
-        fcst_binary: Union[xr.DataArray, np.ndarray],
-        obs_binary: Union[xr.DataArray, np.ndarray],
-    ) -> Dict[str, int]:
+    def compute_contingency_table(fcst_binary: Union[xr.DataArray, np.ndarray],
+                                  obs_binary: Union[xr.DataArray, np.ndarray],) -> Dict[str, int]:
         """
-        Derive a 2×2 contingency table from paired binary exceedance masks. Grid points where either the forecast or observation mask is NaN are excluded from all counts, ensuring out-of-domain cells do not inflate correct negatives or misses. The four categories — hits, misses, false alarms, and correct negatives — are computed on the remaining valid Boolean pairs. The total valid-point count is also returned for use in metrics that require the sample size (e.g. ETS random-hits adjustment).
+        This helper computes the contingency table counts (hits, misses, false alarms, correct negatives) and total valid points from the provided forecast and observation binary masks. It first converts the input binary masks to NumPy arrays while preserving NaN values. Then it creates a boolean mask to identify valid grid points where neither forecast nor observation is NaN. Using this valid mask, it computes the counts for hits (both forecast and observation are true), misses (forecast is false but observation is true), false alarms (forecast is true but observation is false), and correct negatives (both forecast and observation are false). Finally, it returns a dictionary containing these counts along with the total number of valid points considered in the computation. 
 
         Parameters:
             fcst_binary (xr.DataArray or np.ndarray): Binary 0/1/NaN forecast exceedance mask from generate_binary_mask.
@@ -372,7 +365,7 @@ class PerfMetrics:
     @staticmethod
     def pod(table: Dict[str, int]) -> float:
         """
-        Compute the Probability of Detection (POD), also known as the hit rate. POD measures the fraction of observed events that were correctly forecast and ranges from 0 (no events detected) to 1 (all events detected). It is insensitive to false alarms and should be used alongside FAR or CSI for a complete assessment. Returns NaN when there are no observed events (hits + misses = 0).
+        This static method computes the Probability of Detection (POD), which is the fraction of observed events that were correctly forecast. POD ranges from 0 (no hits) to 1 (all observed events were hits) and penalises missed events. It is insensitive to false alarms and should be considered alongside FAR for a balanced evaluation. Returns NaN when there are no observed events (hits + misses = 0). 
 
         Parameters:
             table (Dict[str, int]): Contingency table from compute_contingency_table.
@@ -390,7 +383,7 @@ class PerfMetrics:
     @staticmethod
     def far(table: Dict[str, int]) -> float:
         """
-        Compute the False Alarm Ratio (FAR), the fraction of forecast events that did not occur in observations. FAR ranges from 0 (no false alarms) to 1 (all forecasts were false alarms) and penalises over-forecasting. It is insensitive to missed events and should be considered alongside POD for a balanced evaluation. Returns NaN when there are no forecast events (hits + false_alarms = 0).
+        This static method computes the False Alarm Ratio (FAR), which is the fraction of forecast events that did not occur. FAR ranges from 0 (no false alarms) to 1 (all forecast events were false alarms) and penalises false alarms. It is insensitive to missed events and should be considered alongside POD for a balanced evaluation. Returns NaN when there are no forecast events (hits + false_alarms = 0). 
 
         Parameters:
             table (Dict[str, int]): Contingency table from compute_contingency_table.
@@ -408,7 +401,7 @@ class PerfMetrics:
     @staticmethod
     def csi(table: Dict[str, int]) -> float:
         """
-        Compute the Critical Success Index (CSI), also called the Threat Score (TS). CSI measures the ratio of correct event forecasts to the total number of occasions where the event was either forecast or observed, combining the information from both POD and FAR into a single score. It ranges from 0 (no skill) to 1 (perfect) and is commonly used for rare precipitation events. Returns NaN when there are no events in either forecast or observation (hits + misses + false_alarms = 0).
+        This static method computes the Critical Success Index (CSI), also known as the Threat Score (TS), which is the fraction of forecast and/or observed events that were correctly forecast. CSI ranges from 0 (no hits) to 1 (perfect forecast) and penalises both missed events and false alarms. It is a more balanced metric than POD or FAR alone, especially for rare events, but can be sensitive to sample size. Returns NaN when there are no events in either field (hits + misses + false_alarms = 0). 
 
         Parameters:
             table (Dict[str, int]): Contingency table from compute_contingency_table.
@@ -430,7 +423,7 @@ class PerfMetrics:
     @staticmethod
     def fbias(table: Dict[str, int]) -> float:
         """
-        Compute the Frequency Bias (FBIAS), the ratio of the number of forecast events to the number of observed events. A value of 1.0 indicates no frequency bias, values greater than 1 indicate over-forecasting, and values less than 1 indicate under-forecasting. FBIAS does not measure spatial accuracy — a spatially displaced forecast can still have perfect FBIAS. Returns NaN when there are no observed events (hits + misses = 0).
+        This static method computes the Frequency Bias (FBIAS), which is the ratio of the frequency of forecast events to the frequency of observed events. FBIAS ranges from 0 to infinity, where 1 indicates perfect frequency, values less than 1 indicate underforecasting, and values greater than 1 indicate overforecasting. It does not consider the spatial distribution of hits, misses, or false alarms and should be interpreted alongside other metrics for a comprehensive evaluation. Returns NaN when there are no observed events (hits + misses = 0). 
 
         Parameters:
             table (Dict[str, int]): Contingency table from compute_contingency_table.
@@ -448,7 +441,7 @@ class PerfMetrics:
     @staticmethod
     def ets(table: Dict[str, int]) -> float:
         """
-        Compute the Equitable Threat Score (ETS), also known as the Gilbert Skill Score. ETS adjusts CSI by removing the contribution of hits expected by random chance, providing a fairer comparison across events with different base rates. It ranges from −1/3 to 1, where 0 indicates no skill relative to random. The random-hit correction is computed as hits_random = (hits + misses)(hits + false_alarms) / total. Returns NaN when the denominator is zero or when the total sample size is zero.
+        This static method computes the Equitable Threat Score (ETS), which adjusts the Threat Score (CSI) by accounting for hits that would occur due to random chance. ETS ranges from -1/3 (worse than random) to 1 (perfect forecast), with 0 indicating no skill compared to random chance. It is a more equitable metric than CSI, especially for rare events, but can be sensitive to sample size and the base rate of events. Returns NaN when there are no valid points (total = 0) or when the denominator in the ETS calculation is zero. 
 
         Parameters:
             table (Dict[str, int]): Contingency table from compute_contingency_table.
@@ -482,19 +475,17 @@ class PerfMetrics:
         return (hits - hits_random) / denom if denom != 0 else float("nan")
 
 
-    def compute_contingency_batch(
-        self,
-        forecast_da: xr.DataArray,
-        observation_da: xr.DataArray,
-        thresholds: Optional[List[float]] = None,
-        *,
-        experiment_name: str = "",
-        cycle_start: Optional[datetime.datetime] = None,
-        valid_time: Optional[datetime.datetime] = None,
-        save_intermediate: bool = False,
-    ) -> Dict[float, Dict[str, float]]:
+    def compute_contingency_batch(self: "PerfMetrics",
+                                  forecast_da: xr.DataArray,
+                                  observation_da: xr.DataArray,
+                                  thresholds: Optional[List[float]] = None,
+                                  *,
+                                  experiment_name: str = "",
+                                  cycle_start: Optional[datetime.datetime] = None,
+                                  valid_time: Optional[datetime.datetime] = None,
+                                  save_intermediate: bool = False,) -> Dict[float, Dict[str, float]]:
         """
-        This method computes contingency-table metrics (POD, FAR, CSI, FBIAS, ETS) for each specified percentile threshold. Binary masks are generated once per threshold and reused across all metrics, avoiding redundant percentile and masking work. The results are returned as a dictionary keyed by threshold mapping to a dictionary of the computed metrics.
+        This method computes contingency-table-based metrics (POD, FAR, CSI, FBIAS, ETS) for every specified threshold. It generates binary masks for the forecast and observation fields once per threshold using the _make_binary_masks helper, which computes independent thresholds for each field. Then it computes the contingency metrics for each threshold using the _compute_contingency_metrics helper, which calculates all relevant metrics from the contingency table. The results are logged for each threshold and returned as a dictionary mapping each threshold to its corresponding metrics dictionary. 
 
         Parameters:
             forecast_da (xr.DataArray): Co-located, masked forecast precipitation field.
@@ -540,20 +531,18 @@ class PerfMetrics:
         return results
 
 
-    def compute_fss_batch(
-        self,
-        forecast_da: xr.DataArray,
-        observation_da: xr.DataArray,
-        thresholds: Optional[List[float]] = None,
-        window_sizes: Optional[List[int]] = None,
-        *,
-        experiment_name: str = "",
-        cycle_start: Optional[datetime.datetime] = None,
-        valid_time: Optional[datetime.datetime] = None,
-        save_intermediate: bool = False,
-    ) -> Dict[Tuple[float, int], Dict[str, float]]:
+    def compute_fss_batch(self: "PerfMetrics",
+                          forecast_da: xr.DataArray,
+                          observation_da: xr.DataArray,
+                          thresholds: Optional[List[float]] = None,
+                          window_sizes: Optional[List[int]] = None,
+                          *,
+                          experiment_name: str = "",
+                          cycle_start: Optional[datetime.datetime] = None,
+                          valid_time: Optional[datetime.datetime] = None,
+                          save_intermediate: bool = False,) -> Dict[Tuple[float, int], Dict[str, float]]:
         """
-        Compute FSS for every (threshold, window) combination. Binary masks are computed once per threshold and reused across all window sizes for that threshold, avoiding redundant percentile and masking work. FSS is computed per (threshold, window) pair as it depends on the neighbourhood size. Results are returned as a dictionary keyed by ``(threshold, window_size)`` mapping to a metrics dictionary containing only FSS.
+        This method computes the Fraction Skill Score (FSS) for every combination of specified thresholds and window sizes. It generates binary masks for the forecast and observation fields once per threshold using the _make_binary_masks helper, which computes independent thresholds for each field. Then it computes the fractional coverage fields for both forecast and observation once per window size using the compute_fractional_field helper. Finally, it calculates the FSS for each threshold and window size combination using the _fss_from_fractions helper, which computes the mean squared error between the forecast and observation fractional fields and normalizes it by the reference MSE for no-skill. The results are logged for each combination of threshold and window size before being returned as a dictionary mapping each (threshold, window_size) tuple to its corresponding FSS value. 
 
         Parameters:
             forecast_da (xr.DataArray): Co-located, masked forecast precipitation field.
@@ -609,9 +598,10 @@ class PerfMetrics:
 
 
     @staticmethod
-    def rmse(forecast: np.ndarray, observation: np.ndarray) -> float:
+    def rmse(forecast: np.ndarray, 
+             observation: np.ndarray) -> float:
         """
-        Compute the Root Mean Squared Error between forecast and observation, ignoring NaN. Both input arrays are cast to float64 before differencing to prevent precision issues with integer or float32 inputs. NaN values from out-of-domain masking are excluded from the mean via np.nanmean. This is a simple pointwise metric and does not account for spatial structure or scale the way FSS does.
+        This static method computes the Root Mean Squared Error (RMSE) between the forecast and observation fields. Both input arrays are first converted to float64 to ensure precision during differencing, especially if the original data is in integer or float32 format. The method then calculates the difference between the forecast and observation, squares it, and computes the mean of these squared differences while ignoring any NaN values that may be present due to out-of-domain masking. Finally, the square root of this mean is taken to return the RMSE as a single float value representing the average magnitude of errors between the forecast and observation across all valid grid points. 
 
         Parameters:
             forecast (np.ndarray): Forecast values array; must have the same shape as observation.
@@ -628,9 +618,10 @@ class PerfMetrics:
 
 
     @staticmethod
-    def bias(forecast: np.ndarray, observation: np.ndarray) -> float:
+    def bias(forecast: np.ndarray, 
+             observation: np.ndarray) -> float:
         """
-        Compute the mean bias (forecast minus observation) over all non-NaN grid points. A positive bias indicates systematic over-prediction while a negative bias reflects under-prediction. Both arrays are cast to float64 before differencing and NaN values from out-of-domain masking are excluded via np.nanmean. This metric provides a simple check for systematic offsets independent of spatial skill.
+        This static method computes the mean forecast bias, which is the average difference between the forecast and observation fields. Both input arrays are first converted to float64 to ensure precision during differencing, especially if the original data is in integer or float32 format. The method calculates the difference between the forecast and observation, and then computes the mean of these differences while ignoring any NaN values that may be present due to out-of-domain masking. The resulting bias value indicates whether the forecast tends to overpredict (positive bias) or underpredict (negative bias) compared to the observations across all valid grid points. 
 
         Parameters:
             forecast (np.ndarray): Forecast values array; must have the same shape as observation.

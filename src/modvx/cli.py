@@ -3,7 +3,7 @@
 """
 Command-line interface for MODvx.
 
-This module defines the main entry point for the MODvx verification toolkit when invoked from the command line. It handles argument parsing, configuration loading, and orchestrates the execution of the verification workflow by instantiating the TaskManager and ParallelProcessor. The CLI provides a user-friendly interface for running verification experiments with custom configurations and supports options for logging, output management, and parallel execution settings. By centralizing the CLI logic in this module, we can ensure a consistent user experience and provide a clear starting point for users to interact with the MODvx toolkit.
+This module defines the CLI entry point for the modvx package, including subcommands for running the FSS computation pipeline, extracting results to CSV, generating plots, and validating available options. It uses argparse to construct a user-friendly interface with shared configuration loading and override logic. Each subcommand has its own handler function that resolves the configuration, sets up logging, and delegates to the appropriate components of the MODvx package.
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -24,7 +24,7 @@ from .config import ModvxConfig, load_config_from_yaml, apply_cli_overrides
 
 def configure_root_logging(config: ModvxConfig) -> None:
     """
-    Configure root logging so that logger.info messages are visible on the console. The ``run`` subcommand relies on TaskManager to do this; other subcommands bypass TaskManager entirely, so this helper fills the gap. Sets the log level to DEBUG when verbose mode is enabled in the configuration, or INFO otherwise. Uses ``logging.basicConfig`` with ``force=True`` so the handler is always applied, even if a root handler was already installed.
+    This helper configures the root logging settings based on the provided ModvxConfig. It sets the log level to DEBUG if verbose mode is enabled, otherwise INFO. The log format includes timestamps, log levels, logger names, and messages for consistent and informative logging across all subcommands and modules. This function is called at the start of each subcommand handler to ensure that logging is configured according to the resolved configuration. 
 
     Parameters:
         config (ModvxConfig): Run configuration used to determine the logging level.
@@ -46,7 +46,7 @@ def configure_root_logging(config: ModvxConfig) -> None:
 
 def add_shared_cli_args(parser: argparse.ArgumentParser) -> None:
     """
-    Register arguments that are common to all modvx subcommands on a given parser. Currently registers the ``--config`` flag for pointing to a YAML configuration file and ``--verbose`` for enabling detailed debug logging. Centralising these shared arguments avoids repetition across _build_run_parser, _build_extract_parser, _build_plot_parser, and _build_validate_parser.
+    This helper registers CLI arguments that are common across all subcommands on the provided argument parser. It adds a ``--config`` argument for specifying a YAML configuration file and a ``--verbose`` flag to enable verbose logging. These shared arguments allow users to control the configuration source and logging verbosity consistently across different subcommands without needing to redefine them in each subparser. 
 
     Parameters:
         parser (argparse.ArgumentParser): Argument parser instance for a specific subcommand.
@@ -68,7 +68,7 @@ def add_shared_cli_args(parser: argparse.ArgumentParser) -> None:
 
 def build_run_subparser(sub: argparse._SubParsersAction) -> None:
     """
-    Register all CLI arguments for the ``run`` subcommand on the provided subparsers action. Creates and configures the ``run`` subparser with arguments for experiment name, cycle start/end, forecast and observation timing, verification domains, target resolution, and the MPAS grid file path. Also registers backend selection (``--backend``), worker count (``--nprocs``), and a shared observation cache directory (``--cache-dir``) for multiprocessing runs.
+    This helper registers all CLI arguments for the ``run`` subcommand on the provided subparsers action. It creates and configures the ``run`` subparser with arguments for experiment naming, cycle and forecast period specification, resolution overrides, backend selection for parallel processing, and control flags for saving intermediate fields and enabling logs. Common arguments such as ``--config`` and ``--verbose`` are added via ``add_shared_cli_args``. The handler function for this subcommand is set to ``handle_run_subcommand``. 
 
     Parameters:
         sub (argparse._SubParsersAction): The subparsers action to register the 'run' subcommand on.
@@ -153,7 +153,7 @@ def build_run_subparser(sub: argparse._SubParsersAction) -> None:
 
 def parse_vxdomain_tokens(raw: str) -> list[str]:
     """
-    This helper parses a comma-separated string of verification domain names into a list of uppercase tokens. For example, the input "GLOBAL,TROPICS" would be transformed into ["GLOBAL", "TROPICS"]. The parsing is case-insensitive and trims whitespace around domain names. This allows users to specify multiple verification domains in a single CLI argument while ensuring consistent formatting for downstream processing.
+    This helper parses the raw comma-separated string of verification domains provided via the CLI into a list of normalized, uppercase domain tokens. For example, an input of "GLOBAL,TROPICS" would be parsed into ["GLOBAL", "TROPICS"]. This allows users to specify multiple verification domains in a single argument while ensuring consistent formatting for downstream processing. 
 
     Parameters:
         raw (str): Comma-separated domain names (e.g., "GLOBAL,TROPICS").
@@ -167,7 +167,7 @@ def parse_vxdomain_tokens(raw: str) -> list[str]:
 
 def parse_target_resolution(raw: str) -> float | str:
     """
-    This helper attempts to parse a target resolution value from the CLI. If the input string can be converted to a float, that numeric value is returned (e.g., "0.25" → 0.25). If the input is not parseable as a float (e.g., "obs", "fcst"), the original string is returned unchanged. This allows for flexible specification of either numeric resolutions or special tokens in the same argument.
+    This helper attempts to parse the raw target resolution string provided via the CLI into a numeric value in degrees. If the input is a special token like "obs" or "fcst", it returns the token as-is without parsing. If the input can be successfully parsed as a float, it returns the numeric value; otherwise, it returns the original string token. This allows users to specify either a numeric resolution (e.g., "0.25") or special tokens that indicate using the native resolution of observations or forecasts. 
 
     Parameters:
         raw (str): Raw resolution value from CLI or configuration.
@@ -183,13 +183,14 @@ def parse_target_resolution(raw: str) -> float | str:
         # If parsing succeeds, return the numeric value as a float.
         return float(raw)
     except ValueError:
-        # If parsing fails, return the original string 
+        # If parsing fails, return the original string token for downstream handling.
         return raw
 
 
-def resolve_observation_cache_dir(config: ModvxConfig, cli_cache_dir: str | None) -> str | None:
+def resolve_observation_cache_dir(config: ModvxConfig, 
+                                  cli_cache_dir: str | None) -> str | None:
     """
-    This helper determines the shared observation cache directory based on a priority order: the CLI ``--cache-dir`` flag takes precedence, followed by the YAML configuration's ``cache_dir`` value. If neither is provided, it auto-derives a cache directory path by appending ".obs_cache" to the resolved output directory. If the YAML config already has a non-None ``cache_dir`` and the CLI flag was not used, this function returns None to indicate that no override is needed. The returned path is used to ensure that all parallel workers read and write from the same location when caching accumulated observations.
+    This helper determines the appropriate shared observation cache directory to use for parallel processing based on the provided configuration and CLI arguments. The logic prioritizes the CLI argument if provided, then checks the YAML configuration, and finally falls back to a default path within the output directory if neither is specified. This ensures that all parallel workers have a consistent location for caching accumulated observations, which is essential for efficient execution of the FSS computation pipeline when using multiprocessing or MPI backends. 
 
     Parameters:
         config (ModvxConfig): The resolved configuration object, potentially with YAML values.
@@ -214,7 +215,7 @@ def resolve_observation_cache_dir(config: ModvxConfig, cli_cache_dir: str | None
 
 def handle_run_subcommand(args: argparse.Namespace) -> None:
     """
-    Execute the FSS computation pipeline subcommand handler. Resolves the configuration from CLI arguments, applies backend and resolution overrides, sets up the shared observation cache directory, and then instantiates TaskManager and ParallelProcessor to distribute and run all work-units.
+    This function executes the logic for the ``run`` subcommand. It resolves the configuration by loading from a YAML file if specified and applying any CLI overrides. It then initializes the TaskManager with the resolved configuration to build the set of work units for execution. A ParallelProcessor is instantiated with the TaskManager's execute_work_unit method and the selected backend. Finally, all work units are run in parallel using the ParallelProcessor. This function serves as the main entry point for executing the FSS computation pipeline when users invoke the ``modvx run`` command. 
 
     Parameters:
         args (argparse.Namespace): Parsed arguments from the ``run`` subcommand parser.
@@ -266,7 +267,7 @@ def handle_run_subcommand(args: argparse.Namespace) -> None:
 
 def build_extract_subparser(sub: argparse._SubParsersAction) -> None:
     """
-    Register all CLI arguments for the ``extract-csv`` subcommand on the provided subparsers action. Creates and configures the ``extract-csv`` subparser with arguments for locating FSS NetCDF output files (``--output-dir``) and writing per-experiment CSV summaries (``--csv-dir``). Common arguments such as ``--config`` and ``--verbose`` are added via ``_add_common_args``.
+    This helper registers all CLI arguments for the ``extract-csv`` subcommand on the provided subparsers action. It creates and configures the ``extract-csv`` subparser with a single ``--output-dir`` argument for specifying where to look for FSS NetCDF output files and a ``--csv-dir`` argument for controlling where to write the extracted CSV summaries. Common arguments such as ``--config`` and ``--verbose`` are added via ``add_shared_cli_args``. The handler function for this subcommand is set to ``handle_extract_subcommand``. 
 
     Parameters:
         sub (argparse._SubParsersAction): The subparsers action to register the 'extract-csv' subcommand on.
@@ -281,10 +282,10 @@ def build_extract_subparser(sub: argparse._SubParsersAction) -> None:
     add_shared_cli_args(p)
 
     # Set the default function to handle this subcommand when invoked
-    p.add_argument("--output-dir", type=str, default=None)
+    p.add_argument("--output-dir", type=str, default=None, help="Directory containing FSS NetCDF output files.")
 
     # Set the default function to handle this subcommand when invoked
-    p.add_argument("--csv-dir", type=str, default=None)
+    p.add_argument("--csv-dir", type=str, default=None, help="Directory to write extracted CSV summaries.")
 
     # Set the default function to handle this subcommand when invoked
     p.set_defaults(func=handle_extract_subcommand)
@@ -292,7 +293,7 @@ def build_extract_subparser(sub: argparse._SubParsersAction) -> None:
 
 def handle_extract_subcommand(args: argparse.Namespace) -> None:
     """
-    Execute the extract-csv subcommand handler. Resolves the configuration, instantiates FileManager, and delegates to extract_fss_to_csv to scan FSS NetCDF output files and write per-experiment CSV summaries.
+    This function executes the logic for the ``extract-csv`` subcommand. It resolves the configuration by loading from a YAML file if specified and applying any CLI overrides. It then instantiates the FileManager with the resolved configuration and calls its method to extract FSS results from NetCDF files in the specified output directory, writing CSV summaries to the specified CSV directory. This function serves as the main entry point for users to generate CSV summaries of FSS results after running the main pipeline when they invoke the ``modvx extract-csv`` command. 
 
     Parameters:
         args (argparse.Namespace): Parsed arguments from the ``extract-csv`` subcommand parser.
@@ -317,7 +318,7 @@ def handle_extract_subcommand(args: argparse.Namespace) -> None:
 
 def build_plot_subparser(sub: argparse._SubParsersAction) -> None:
     """
-    Register all CLI arguments for the ``plot`` subcommand on the provided subparsers action. Creates and configures the ``plot`` subparser with arguments for filtering by domain, threshold, and accumulation window, and for controlling output locations (``--csv-dir``, ``--output-dir``). Supports an optional ``--metric`` filter for selecting specific metrics to plot and an ``--all`` flag to generate every available combination automatically.
+    This helper registers all CLI arguments for the ``plot`` subcommand on the provided subparsers action. It creates and configures the ``plot`` subparser with arguments for specifying the verification domain, percentile threshold, accumulation window size, and an optional comma-separated list of metrics to plot. A flag is also provided to generate plots for all combinations of available options. Common arguments such as ``--config`` and ``--verbose`` are added via ``add_shared_cli_args``. The handler function for this subcommand is set to ``handle_plot_subcommand``.
 
     Parameters:
         sub (argparse._SubParsersAction): The subparsers action to register the 'plot' subcommand on.
@@ -332,19 +333,19 @@ def build_plot_subparser(sub: argparse._SubParsersAction) -> None:
     add_shared_cli_args(p)
 
     # Specify the verification domain to plot (e.g., "GLOBAL", "TROPICS"). 
-    p.add_argument("--domain", type=str, default=None)
+    p.add_argument("--domain", type=str, default=None, help="Verification domain to plot (e.g., 'GLOBAL', 'TROPICS').")
 
     # Specify the percentile threshold as a string (e.g., "0.1", "0.5", "obs")
-    p.add_argument("--thresh", type=str, default=None)
+    p.add_argument("--thresh", type=str, default=None, help="Percentile threshold to plot (e.g., '0.1', '0.5', 'obs').")
 
     # Specify the accumulation window size as a string (e.g., "1h", "3h", "6h") 
-    p.add_argument("--window", type=str, default=None)
+    p.add_argument("--window", type=str, default=None, help="Accumulation window size to plot (e.g., '1h', '3h', '6h').")
 
     # Set the default function to handle this subcommand when invoked
-    p.add_argument("--csv-dir", type=str, default=None)
+    p.add_argument("--csv-dir", type=str, default=None, help="Directory containing CSV summaries of FSS results.")
 
     # Set the default function to handle this subcommand when invoked
-    p.add_argument("--output-dir", type=str, default=None)
+    p.add_argument("--output-dir", type=str, default=None, help="Directory to write generated plots.")
 
     # Optionally, specify a comma-separated list of metrics to plot (e.g., "fss,pod,csi"). 
     p.add_argument(
@@ -363,7 +364,7 @@ def build_plot_subparser(sub: argparse._SubParsersAction) -> None:
 
 def handle_plot_subcommand(args: argparse.Namespace) -> None:
     """
-    Execute the plot subcommand handler. Resolves the configuration, instantiates Visualizer, and generates either a single metric-vs-leadtime plot for the specified (domain, threshold, window, metric) combination or all combinations when the ``--all`` flag is provided. An optional ``--metric`` filter restricts which metrics are plotted.
+    This function executes the logic for the ``plot`` subcommand. It resolves the configuration by loading from a YAML file if specified and applying any CLI overrides. It then instantiates the Visualizer with the resolved configuration. If specific metric, domain, threshold, and window arguments are provided, it generates a single plot for that combination; if the --all flag is set, it generates plots for all available combinations in the CSV directory. If required arguments are missing for the single-plot case, it prints an error message and exits with code 1. This function serves as the main entry point for users to generate visualizations of FSS results when they invoke the ``modvx plot`` command. 
 
     Parameters:
         args (argparse.Namespace): Parsed arguments from the ``plot`` subcommand parser.
@@ -407,7 +408,7 @@ def handle_plot_subcommand(args: argparse.Namespace) -> None:
 
 def build_validate_subparser(sub: argparse._SubParsersAction) -> None:
     """
-    Register all CLI arguments for the ``validate`` subcommand on the provided subparsers action. Creates and configures the ``validate`` subparser with a single ``--csv-dir`` argument for specifying where to look for CSV output files. The subcommand prints the unique domains, thresholds, and window sizes available and exits with code 1 when no data is found.
+    This helper registers all CLI arguments for the ``validate`` subcommand on the provided subparsers action. It creates and configures the ``validate`` subparser with a single optional argument for specifying the CSV directory to validate. Common arguments such as ``--config`` and ``--verbose`` are added via ``add_shared_cli_args``. The handler function for this subcommand is set to ``handle_validate_subcommand``. 
 
     Parameters:
         sub (argparse._SubParsersAction): The subparsers action to register the 'validate' subcommand on.
@@ -422,7 +423,7 @@ def build_validate_subparser(sub: argparse._SubParsersAction) -> None:
     add_shared_cli_args(p)
 
     # Set the default function to handle this subcommand when invoked
-    p.add_argument("--csv-dir", type=str, default=None)
+    p.add_argument("--csv-dir", type=str, default=None, help="Directory containing CSV summaries of FSS results.")
 
     # Set the default function to handle this subcommand when invoked
     p.set_defaults(func=handle_validate_subcommand)
@@ -430,7 +431,7 @@ def build_validate_subparser(sub: argparse._SubParsersAction) -> None:
 
 def handle_validate_subcommand(args: argparse.Namespace) -> None:
     """
-    Execute the validate subcommand handler. Resolves the configuration, instantiates Visualizer, and prints the unique domains, thresholds, and window sizes available in the CSV output directory. Exits with code 1 when no CSV data is found.
+    This function executes the logic for the ``validate`` subcommand. It resolves the configuration by loading from a YAML file if specified and applying any CLI overrides. It then instantiates the Visualizer with the resolved configuration and calls its method to list the unique verification domains, percentile thresholds, and accumulation window sizes available in the specified CSV directory. If no CSV data is found, it prints a message and exits with code 1. Otherwise, it prints the available options in a user-friendly format. This function serves as a utility for users to quickly check what combinations of parameters are available in their CSV summaries before attempting to generate plots or run analyses. 
 
     Parameters:
         args (argparse.Namespace): Parsed arguments from the ``validate`` subcommand parser.
@@ -465,7 +466,7 @@ def handle_validate_subcommand(args: argparse.Namespace) -> None:
 
 def resolve_config_from_namespace(args: argparse.Namespace) -> ModvxConfig:
     """
-    Resolve the active ModvxConfig from a parsed argument namespace. If a ``--config`` path was provided, the YAML file is loaded as the base configuration; otherwise the default ModvxConfig values are used. Any recognised non-None arguments in the namespace are then applied as overrides via merge_cli_overrides. This function is called at the start of every subcommand handler to obtain a fully populated configuration object ready for use.
+    This helper function resolves the ModvxConfig configuration object based on the provided argparse.Namespace from the CLI. It first checks if a YAML configuration file is specified via the ``--config`` argument and loads it if present; otherwise, it starts with the default configuration values. It then iterates through potential CLI override fields, collecting any that are provided into an overrides dictionary. Finally, it applies any collected CLI overrides to the base configuration using the ``apply_cli_overrides`` function and returns the fully resolved ModvxConfig object. This function centralizes the logic for merging YAML defaults with CLI overrides, ensuring consistent configuration resolution across all subcommands. 
 
     Parameters:
         args (argparse.Namespace): Parsed command-line arguments namespace from argparse.
@@ -511,7 +512,7 @@ def resolve_config_from_namespace(args: argparse.Namespace) -> ModvxConfig:
 
 def main(argv: Optional[List[str]] = None) -> None:
     """
-    Entry point for the ``modvx`` command-line interface installed via setuptools. Constructs the top-level argument parser with four subcommands: ``run``, ``extract-csv``, ``plot``, and ``validate``. Each subcommand is registered by its dedicated builder function. After parsing, the subcommand's handler is dispatched via the ``func`` default set on each subparser.
+    This is the main entry point for the modvx command-line interface. It constructs the argument parser with subcommands for running the FSS computation pipeline, extracting results to CSV, generating plots, and validating available options. It parses the command-line arguments and dispatches to the appropriate handler function based on the selected subcommand. This function is invoked when users run the ``modvx`` command from the terminal, allowing them to interact with the various functionalities of the MODvx package through a user-friendly CLI. 
 
     Parameters:
         argv (list of str, optional): Argument list to parse; defaults to ``sys.argv[1:]`` when None.

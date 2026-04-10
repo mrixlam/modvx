@@ -3,7 +3,7 @@
 """
 Configuration management for MODvx.
 
-This module defines the ModvxConfig class, which encapsulates all configuration parameters for a modvx verification run. The configuration is typically loaded from a YAML file and may be overridden by command-line arguments. The ModvxConfig class provides structured access to all settings, including paths, forecast and observation parameters, verification domains, thresholds, and parallel processing options. By centralizing configuration management in this class, we can ensure consistent handling of parameters across the entire pipeline and provide a single source of truth for all configurable aspects of the verification workflow. The module also includes a helper function to load the configuration from a YAML file and apply any necessary overrides.
+This module defines the ModvxConfig dataclass, which encapsulates all configuration parameters for a MODvx verification run. It includes functionality to load configuration from a YAML file, apply command-line overrides, and provide convenient properties for time intervals. The configuration parameters cover experiment details, data paths, verification settings, and output options. This centralised configuration management allows for flexible and consistent handling of user inputs across the entire codebase. 
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -42,9 +42,8 @@ _DEFAULT_REGIONS: Dict[str, str] = {
 
 @dataclass
 class ModvxConfig:
-    """
-    Central configuration dataclass for a complete modvx FSS verification run. All path fields are stored as relative strings and resolved against ``base_dir`` at runtime, so the same YAML file remains portable across machines and working directories. Temporal parameters are stored as raw integer hour counts and exposed as ``datetime.timedelta`` properties for convenient arithmetic. Default values reflect a typical global 48-hour forecast experiment configuration.
-    """
+    """ Central configuration dataclass for a complete modvx verification run. """
+
     # Set a default experiment name for use in output directories and file naming 
     experiment_name: str = "liuz_coldstart_15km2025"
 
@@ -77,7 +76,7 @@ class ModvxConfig:
     mpas_grid_file: str = ""  
 
     # Set the default resolution for remapping MPAS data to a lat-lon grid in degrees
-    mpas_remap_resolution: float = 0.1  
+    mpas_remap_resolution: float = 1.0  
 
     # Specify the target resolution for remapping MPAS data
     target_resolution: Union[str, float] = "obs"
@@ -111,7 +110,7 @@ class ModvxConfig:
     # Specify the template for constructing observation file paths
     observation_template: str = (
         "{obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000."
-        "E{date_key}T235959.{vintage}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc"
+        "E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc"
     )
 
     # Specify the preferred vintage of observation data to use when multiple are available
@@ -136,44 +135,99 @@ class ModvxConfig:
 
 
     @property
-    def forecast_step(self) -> datetime.timedelta:
-        # Return the forecast step interval as a datetime.timedelta 
+    def forecast_step(self: "ModvxConfig") -> datetime.timedelta:
+        """ 
+        This property returns the forecast step interval as a datetime.timedelta object, which is computed by converting the configured forecast_step_hours (an integer representing hours) into a timedelta. This allows for consistent handling of time intervals throughout the codebase, as all time-related parameters can be accessed in a standardized format. The forecast_step_hours field is expected to be set in the YAML configuration file and can be overridden by command-line arguments, but this property ensures that any access to the forecast step interval will always receive a properly formatted timedelta object regardless of how the underlying hours value was specified. 
+
+        Parameters:
+            None
+        
+        Returns:
+            datetime.timedelta: The forecast step interval represented as a timedelta object, computed from the forecast_step_hours field.
+        """
+        # Return the forecast step interval as a timedelta by converting the forecast_step_hours to hours
         return datetime.timedelta(hours=self.forecast_step_hours)
 
 
     @property
-    def effective_precip_accum_hours(self) -> int:
+    def effective_precip_accum_hours(self: "ModvxConfig") -> int:
+        """ 
+        This property computes the effective precipitation accumulation period in hours based on the configuration. If the user has explicitly set precip_accum_hours to a positive value, that value is returned directly as the accumulation period. However, if precip_accum_hours is set to 0 (the default), it indicates that the accumulation period should be the same as the forecast step interval, which is determined by forecast_step_hours. This allows for flexible configuration where users can either specify a custom accumulation period or simply use the forecast step interval as the default accumulation period without needing to set it explicitly. By centralizing this logic in a property, we ensure that all parts of the code that need to access the effective precipitation accumulation period can do so consistently and without needing to duplicate this conditional logic. 
+
+        Parameters:
+            None
+
+        Returns:
+            int: The effective precipitation accumulation period in hours.
+        """
         # Return precip_accum_hours if set, otherwise fall back to forecast_step_hours
         return self.precip_accum_hours if self.precip_accum_hours > 0 else self.forecast_step_hours
 
 
     @property
-    def precip_accum(self) -> datetime.timedelta:
+    def precip_accum(self: "ModvxConfig") -> datetime.timedelta:
+        """ 
+        This property returns the effective precipitation accumulation period as a datetime.timedelta object, which is computed from the effective_precip_accum_hours property. This allows for consistent handling of time intervals throughout the codebase, as all time-related parameters can be accessed in a standardized format. The effective_precip_accum_hours property determines the accumulation period in hours based on the configuration, and this precip_accum property converts that value into a timedelta for use in any context where a timedelta is required (e.g., when calculating valid times for observations or forecasts). By providing this as a property, we ensure that any access to the precipitation accumulation period will always receive a properly formatted timedelta object regardless of how the underlying hours value was specified in the configuration. 
+
+        Parameters:
+            None
+
+        Returns:
+            datetime.timedelta: The effective precipitation accumulation period represented as a timedelta object, computed from the effective_precip_accum_hours field.
+        """
         # Return the effective precipitation accumulation period as a timedelta
         return datetime.timedelta(hours=self.effective_precip_accum_hours)
 
 
     @property
-    def observation_interval(self) -> datetime.timedelta:
+    def observation_interval(self: "ModvxConfig") -> datetime.timedelta:
+        """ 
+        This property returns the observation interval as a datetime.timedelta object, which is computed by converting the configured observation_interval_hours (an integer representing hours) into a timedelta. This allows for consistent handling of time intervals throughout the codebase, as all time-related parameters can be accessed in a standardized format. The observation_interval_hours field is expected to be set in the YAML configuration file and can be overridden by command-line arguments, but this property ensures that any access to the observation interval will always receive a properly formatted timedelta object regardless of how the underlying hours value was specified. 
+
+        Parameters:
+            None
+
+        Returns:
+            datetime.timedelta: The observation interval represented as a timedelta object, computed from the observation_interval_hours field.
+        """
         # Return the observation interval as a datetime.timedelta
         return datetime.timedelta(hours=self.observation_interval_hours)
 
 
     @property
-    def cycle_interval(self) -> datetime.timedelta:
+    def cycle_interval(self: "ModvxConfig") -> datetime.timedelta:
+        """ 
+        This property returns the cycle interval as a datetime.timedelta object, which is computed by converting the configured cycle_interval_hours (an integer representing hours) into a timedelta. This allows for consistent handling of time intervals throughout the codebase, as all time-related parameters can be accessed in a standardized format. The cycle_interval_hours field is expected to be set in the YAML configuration file and can be overridden by command-line arguments, but this property ensures that any access to the cycle interval will always receive a properly formatted timedelta object regardless of how the underlying hours value was specified. 
+
+        Parameters:
+            None
+
+        Returns:
+            datetime.timedelta: The cycle interval represented as a timedelta object, computed from the cycle_interval_hours field.
+        """
         # Return the cycle interval as a datetime.timedelta
         return datetime.timedelta(hours=self.cycle_interval_hours)
 
 
     @property
-    def forecast_length(self) -> datetime.timedelta:
+    def forecast_length(self: "ModvxConfig") -> datetime.timedelta:
+        """ 
+        This property returns the forecast length as a datetime.timedelta object, which is computed by converting the configured forecast_length_hours (an integer representing hours) into a timedelta. This allows for consistent handling of time intervals throughout the codebase, as all time-related parameters can be accessed in a standardized format. The forecast_length_hours field is expected to be set in the YAML configuration file and can be overridden by command-line arguments, but this property ensures that any access to the forecast length will always receive a properly formatted timedelta object regardless of how the underlying hours value was specified. 
+
+        Parameters:
+            None
+
+        Returns:
+            datetime.timedelta: The forecast length represented as a timedelta object, computed from the forecast_length_hours field.
+        """
         # Return the forecast length as a datetime.timedelta
         return datetime.timedelta(hours=self.forecast_length_hours)
 
 
-    def resolve_relative_path(self, rel: str) -> str:
+    def resolve_relative_path(self: "ModvxConfig", 
+                              rel: str) -> str:
         """
-        Resolve a relative path string against the configured base directory. All directory fields in ModvxConfig are stored as relative strings and must be resolved before use in filesystem operations. This helper centralises that resolution so that the same YAML configuration file works regardless of the current working directory. The result is returned as a plain string for compatibility with os.path and xarray file-loading functions.
+        This helper method resolves a relative path string against the configured base directory. It takes a relative path (e.g., "fcst/data.nc") and returns the absolute path formed by joining the base_dir with the provided relative path. This is useful for constructing full paths to input data, output files, or intermediate results based on the structured directory layout defined in the configuration. By centralizing this path resolution logic in a method, we ensure that all parts of the code that need to access files can do so consistently and without needing to manually join paths or worry about the base directory. The result is returned as a plain string suitable for passing to file I/O functions. 
 
         Parameters:
             rel (str): Relative path string to resolve against ``base_dir``.
@@ -185,9 +239,10 @@ class ModvxConfig:
         return str(Path(self.base_dir) / rel)
 
 
-    def resolve_mask_path(self, mask_filename: str) -> str:
+    def resolve_mask_path(self: "ModvxConfig", 
+                          mask_filename: str) -> str:
         """
-        Resolve a mask filename to its full path under the configured mask directory. Mask files are stored in a dedicated subdirectory (``mask_dir``) beneath ``base_dir``. This helper constructs the full path by joining both directory levels with the filename. It is used by TaskManager when loading region masks specified in the regions dictionary. The result is a plain string suitable for passing to xarray or os.path functions.
+        This helper method resolves the full path to a mask file based on the configured base directory and mask directory. It takes a bare filename of a mask NetCDF file (e.g., "G004_GLOBAL.nc") and returns the absolute path formed by joining the base_dir, mask_dir, and the provided filename. This is specifically designed for accessing region mask files that are stored in a dedicated masks directory under the base directory. By using this method, any part of the code that needs to access a mask file can simply provide the filename and rely on this method to construct the correct path, ensuring consistency and reducing the likelihood of path-related errors. The result is returned as a plain string suitable for passing to file I/O functions. 
 
         Parameters:
             mask_filename (str): Bare filename of the mask NetCDF file (e.g., ``"G004_GLOBAL.nc"``).
@@ -201,7 +256,7 @@ class ModvxConfig:
 
 def _parse_datetime_string(s: str) -> datetime.datetime:
     """
-    Parse a compact or ISO-8601 datetime string into a Python datetime object. Accepted formats include the YAML-friendly ``yyyymmddThh`` compact form and standard ISO-8601 variants with full time components. The function tries each format sequentially and returns the first successful parse. A ValueError is raised with the offending string when none of the formats match.
+    This helper function attempts to parse a datetime string into a datetime.datetime object. It supports multiple common formats, including the compact "yyyymmddThh" format and standard ISO-8601 formats with or without seconds. The function iterates through a predefined list of accepted datetime formats and tries to parse the input string against each format until a successful parse is achieved. If the input string does not match any of the accepted formats, a ValueError is raised indicating that the datetime could not be parsed. This function is used to coerce string values from YAML configurations or CLI arguments into proper datetime objects for use in the ModvxConfig dataclass. 
 
     Parameters:
         s (str): Datetime string in ``yyyymmddThh`` or ISO-8601 format.
@@ -223,9 +278,10 @@ def _parse_datetime_string(s: str) -> datetime.datetime:
     raise ValueError(f"Cannot parse datetime: {s!r}")
 
 
-def _coerce_config_value(key: str, raw: Any) -> Any:
+def _coerce_config_value(key: str, 
+                         raw: Any) -> Any:
     """
-    Coerce a raw YAML scalar value to the Python type expected by ModvxConfig. YAML loaders return string values as plain Python strings, but certain ModvxConfig fields require datetime objects. This function identifies those fields by name and applies the appropriate conversion via _parse_datetime_str. All other fields are returned unchanged, relying on the dataclass constructor to perform any remaining type coercion.
+    This helper function coerces raw values from YAML configurations or CLI arguments into the appropriate Python types based on the ModvxConfig field they correspond to. It checks if the given key corresponds to a datetime field (e.g., "initial_cycle_start" or "final_cycle_start") and if the raw value is a string, it attempts to parse it into a datetime object using the _parse_datetime_string function. For all other fields, it returns the raw value unchanged, allowing the YAML loader to handle type coercion for basic types like integers, floats, lists, etc. This function centralizes the logic for type coercion of configuration values, ensuring that any datetime fields are consistently parsed regardless of how they were specified in the YAML file or CLI arguments. 
 
     Parameters:
         key (str): ModvxConfig field name corresponding to the YAML key.
@@ -247,7 +303,7 @@ def _coerce_config_value(key: str, raw: Any) -> Any:
 
 def load_config_from_yaml(yaml_path: Union[str, Path]) -> ModvxConfig:
     """
-    Load a YAML configuration file and return a fully populated ModvxConfig instance. The function reads the YAML file, coerces each recognised field to its expected Python type via _coerce_value, and constructs a ModvxConfig dataclass with the merged values. Unknown YAML keys are silently ignored so that user configuration files can include comments or extra entries without raising errors. A FileNotFoundError is raised immediately when the specified path does not exist.
+    This function loads a ModvxConfig configuration object from a YAML file. It takes the path to the YAML file as input, reads and parses the file using the PyYAML library, and then constructs a ModvxConfig instance by coercing the raw YAML values into the appropriate types. The function checks for the existence of the specified YAML file and raises a FileNotFoundError if it does not exist. It also uses the _coerce_config_value helper function to ensure that any datetime fields are properly parsed from strings. The resulting ModvxConfig object is fully populated with values from the YAML file, ready for use in the rest of the codebase. 
 
     Parameters:
         yaml_path (str or Path): Path to the YAML configuration file.
@@ -281,9 +337,10 @@ def load_config_from_yaml(yaml_path: Union[str, Path]) -> ModvxConfig:
     return ModvxConfig(**kwargs)
 
 
-def apply_cli_overrides(config: ModvxConfig, overrides: Dict[str, Any]) -> ModvxConfig:
+def apply_cli_overrides(config: ModvxConfig, 
+                        overrides: Dict[str, Any]) -> ModvxConfig:
     """
-    Create and return a new ModvxConfig with selected fields overridden by CLI-provided values. This function is non-destructive — it copies all fields from the base configuration and applies only the non-``None`` entries from *overrides*, leaving everything else unchanged. Unknown keys are silently ignored so that argparse Namespace objects can be passed directly without prior filtering. Type coercion is applied to datetime fields via _coerce_value.
+    This function applies command-line overrides to a base ModvxConfig configuration object. It takes the original configuration and a dictionary of overrides (where keys are ModvxConfig field names and values are the override values from the CLI). The function creates a new dictionary that starts with all the fields from the original configuration and then updates it with any non-None override values for recognized fields, coercing types as needed using the _coerce_config_value helper function. Finally, it constructs and returns a new ModvxConfig instance using the merged values. This allows users to specify a base configuration in a YAML file and then selectively override specific parameters via command-line arguments without needing to modify the YAML file directly. 
 
     Parameters:
         config (ModvxConfig): Base configuration, typically loaded from a YAML file.

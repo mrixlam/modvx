@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Visualisation helpers for modvx plotting utilities.
+Visualisation helpers for MODvx plotting utilities.
 
-This module provides the :class:`Visualizer` class and supporting helpers to
-produce verification plots from accumulated CSV results. It supports
-metric-vs-lead-time comparison plots, metric-difference plots (experiment −
-control), Cartopy horizontal maps for gridded fields, and batch generation
-across domains, thresholds and windows. By default plot outputs are written
-as PNG files to the configured plot directory.
+This module defines the :class:`Visualizer` which centralises logic for generating plots from per-experiment CSV outputs. It includes methods to read CSV files, filter and aggregate metric values by lead time, and create line plots comparing experiments. The visualizer handles dynamic axis limits, tick intervals, and plot styling to produce clear and informative visualizations of verification metrics across different experiments and configurations. 
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -54,28 +49,31 @@ _WINDOW_INDEPENDENT_METRICS = {"pod", "far", "csi", "fbias", "ets"}
 
 
 class Visualizer:
-    """
-    The :class:`Visualizer` centralises plotting logic for verification metrics computed from per-experiment CSV outputs. It supports per-metric comparison plots across experiments, experiment-minus-control difference plots, optional Cartopy-based horizontal maps of gridded fields, and batch generation of combinations discovered in CSV data. All outputs are saved as high-resolution PNG files in the configured plotting directory.
+    """ The :class:`Visualizer` centralises plotting logic for verification metrics computed from per-experiment CSV outputs. """
 
-    Parameters:
-        config (ModvxConfig): Run configuration providing directory paths and experiment settings used by plotting methods.
-    """
+    def __init__(self: "Visualizer", 
+                 config: ModvxConfig) -> None:
+        """ 
+        This initializer stores the provided configuration object for use by plotting methods. The configuration provides directory paths and experiment settings that are used to resolve input CSV locations, output plot destinations, and to determine plot styling based on experiment metadata. 
 
-    def __init__(self, config: ModvxConfig) -> None:
+        Parameters:
+            config (ModvxConfig): Run configuration providing directory paths and experiment settings used by plotting methods.
+
+        Returns:
+            None
+        """
         self.config = config
 
 
-    def _resolve_plot_dirs(
-        self,
-        csv_dir: Optional[str],
-        output_dir: Optional[str],
-    ) -> Tuple[str, str]:
+    def _resolve_plot_dirs(self: "Visualizer",
+                           csv_dir: Optional[str],
+                           output_dir: Optional[str],) -> Tuple[str, str]:
         """
-        This helper determines the CSV input directory and the output directory for plots by falling back to values defined in the associated :class:`ModvxConfig` when explicit arguments are not provided. It also ensures the resolved output directory exists on disk so callers may safely write files to it.
+        This helper method resolves the CSV input directory and output directory for plots by using the provided arguments or falling back to the configuration values. It ensures that the output directory exists by creating it if necessary. The method returns a tuple containing the resolved CSV directory and output directory as strings, which can then be used by plotting methods to read input data and save output figures. 
 
         Parameters:
-            csv_dir (str, optional): Optional CSV directory path to override the configuration value. If ``None`` the config value is used.
-            output_dir (str, optional): Optional output directory path to override the configuration value. If ``None`` the config value is used.
+            csv_dir (str, optional): Optional CSV directory path to override the configuration value. 
+            output_dir (str, optional): Optional output directory path to override the configuration value. 
 
         Returns:
             Tuple[str, str]: A tuple ``(resolved_csv, resolved_out)`` with both paths as resolved strings.
@@ -97,14 +95,12 @@ class Visualizer:
 
 
     @staticmethod
-    def _filter_df(
-        results_df: pd.DataFrame,
-        domain: str,
-        thresh_val: float,
-        window_val: int,
-    ) -> pd.DataFrame:
+    def _filter_df(results_df: pd.DataFrame,
+                   domain: str,
+                   thresh_val: float,
+                   window_val: int,) -> pd.DataFrame:
         """
-        This static helper applies boolean filtering on the provided DataFrame to select rows that match the specified domain name, percentile threshold, and neighbourhood window size. It preserves the original row ordering and returns a DataFrame containing only the matching rows (may be empty).
+        This helper method filters the input results DataFrame to include only rows that match the specified domain, threshold value, and window size. It creates a boolean mask to select rows where the 'domain', 'thresh', and 'window' columns match the provided values, and then returns a filtered DataFrame containing only those matching rows. This function is used to isolate the relevant subset of data for plotting specific metrics under certain experimental conditions. 
 
         Parameters:
             results_df (pandas.DataFrame): Input results DataFrame containing columns ``domain``, ``thresh``, ``window`` and metric columns.
@@ -127,15 +123,13 @@ class Visualizer:
 
 
     @staticmethod
-    def _aggregate_metric(
-        csv_file: Path,
-        domain: str,
-        thresh_val: float,
-        window_val: Optional[int],
-        metric: str,
-    ) -> Optional["pd.Series[float]"]:
+    def _aggregate_metric(csv_file: Path,
+                          domain: str,
+                          thresh_val: float,
+                          window_val: Optional[int],
+                          metric: str,) -> Optional["pd.Series[float]"]:
         """
-        This helper reads a single per-experiment CSV file, validates the requested metric column exists, filters rows to the specified domain, threshold and window, and computes the mean metric value for each lead time. It returns a :class:`pandas.Series` indexed by ``leadTime`` with float values, or ``None`` if the metric column is missing or no rows match the filter (warnings are logged in those cases).
+        This helper method reads a CSV file into a DataFrame, checks for the presence of the specified metric column, applies filtering based on domain, threshold and window criteria, and returns a Series of mean metric values indexed by lead time. If the metric column is not present or if no rows match the filter criteria, the method logs a warning and returns ``None`` to indicate that this experiment cannot be plotted for the requested metric. This function centralizes the logic for extracting and aggregating metric values from per-experiment CSV files, allowing plotting methods to focus on visualization while relying on this helper for data preparation. 
 
         Parameters:
             csv_file (pathlib.Path): Path to the experiment CSV file to read.
@@ -191,9 +185,11 @@ class Visualizer:
 
 
     @staticmethod
-    def _set_y_limits(ax: "Any", values_list: list[float], metric: str) -> None:
+    def _set_y_limits(ax: "Any", 
+                      values_list: list[float], 
+                      metric: str) -> None:
         """
-        This function computes sensible y-axis limits from the finite numeric values in ``values``. A small padding is added to the data range to avoid clipping, and metrics known to be bounded (for example FSS, POD, FAR, CSI) are clamped to the interval [0, 1]. If ``values`` contains no finite numbers the function returns without modifying the axis.
+        This helper method sets the y-axis limits on the provided axis object based on the range of valid finite metric values in the input list. It calculates the minimum and maximum of the valid values, adds a padding of 10% of the range to both limits, and then clamps the limits to [0, 1] if the metric is known to be bounded within this interval (such as FSS, POD, FAR, CSI). This dynamic limit setting ensures that plots are appropriately scaled to the data while respecting known bounds for certain metrics. If there are no valid finite values in the input list, the method returns without modifying the axis to avoid errors or misleading plots. 
 
         Parameters:
             ax (Any): Matplotlib Axes-like object on which to set y-limits.
@@ -228,9 +224,12 @@ class Visualizer:
         ax.set_ylim(ymin, ymax)
 
 
-    def _leadtime_tick_interval(self) -> int:
+    def _leadtime_tick_interval(self: "Visualizer") -> int:
         """
-        This helper determines a sensible lead-time tick interval in hours based on the forecast length configured in the associated :class:`ModvxConfig`. Shorter forecast lengths get more frequent ticks (for example, 1-hour intervals for up to 12 hours) while longer forecast lengths get less frequent ticks (for example, 6 or 12-hour intervals for up to 48 hours or more). This dynamic tick interval helps maintain readability across different forecast lengths.
+        This helper method determines an appropriate lead-time tick interval in hours based on the forecast length configured in the Visualizer's associated ModvxConfig. It uses conditional logic to return a sensible interval: 1 hour for short forecasts up to 12 hours, 3 hours for forecasts between 12 and 24 hours, 6 hours for forecasts between 24 and 48 hours, and 12 hours for longer forecasts. This dynamic tick interval selection helps ensure that x-axis ticks are appropriately spaced for readability across different forecast lengths.
+
+        Parameters:
+            None
 
         Returns:
             int: Lead-time tick interval in hours.
@@ -254,9 +253,11 @@ class Visualizer:
         return 12
 
 
-    def _apply_leadtime_ticks(self, ax: "Any", lead_times: list[float]) -> None:
+    def _apply_leadtime_ticks(self: "Visualizer", 
+                              ax: "Any", 
+                              lead_times: list[float]) -> None:
         """
-        This helper applies x-ticks to the provided axis object based on the available lead-time values. It determines a sensible tick interval using the helper method :meth:`_leadtime_tick_interval`, calculates tick positions from the minimum to maximum lead time with the determined interval, and sets the x-ticks on the axis. If no lead times are provided, the function returns without modifying the axis.
+        This helper method applies lead-time ticks to the x-axis of the provided axis object based on the available lead-time values. It first determines an appropriate tick interval using the helper method _leadtime_tick_interval, then calculates the minimum and maximum lead times from the input list. It generates an array of tick positions starting from either 0 or the first step interval (if the minimum lead time is greater than 0) up to the maximum lead time, with the determined step interval. Finally, it sets these calculated tick positions on the x-axis of the provided axis object. If there are no lead times provided, the method returns without setting ticks to avoid errors. 
 
         Parameters:
             ax (Any): Matplotlib Axes-like object on which to set x-ticks.
@@ -287,16 +288,14 @@ class Visualizer:
 
 
     @staticmethod
-    def _finalise_plot(
-        fig: "Any",
-        ax: "Any",
-        xlabel: str,
-        ylabel: str,
-        title: str,
-        out_path: str,
-    ) -> str:
+    def _finalise_plot(fig: "Any",
+                       ax: "Any",
+                       xlabel: str,
+                       ylabel: str,
+                       title: str,
+                       out_path: str,) -> str:
         """
-        This helper applies axis labels, title, legend and grid styling, tightens the layout, writes the figure to ``out_path`` at high resolution, and closes the figure to release resources. It returns the path to the saved file for callers that wish to log or further manipulate the output path.
+        This helper method finalizes the plot by setting axis labels, title, legend, grid, and tick parameters for improved readability and styling. It then saves the figure to the specified output path with high resolution and tight layout, and closes the figure to free up memory resources. Finally, it returns the output path for logging purposes. This function centralizes common plot finalization steps to ensure consistency across different plots generated by the Visualizer. 
 
         Parameters:
             fig (Any): Matplotlib Figure object to finalize and save.
@@ -335,17 +334,15 @@ class Visualizer:
         return out_path
 
 
-    def plot_fss_vs_leadtime(
-        self,
-        domain: str = "GLOBAL",
-        thresh: str = "90",
-        window: Optional[str] = "3",
-        csv_dir: Optional[str] = None,
-        output_dir: Optional[str] = None,
-        metric: str = "fss",
-    ) -> Optional[str]:
+    def plot_fss_vs_leadtime(self: "Visualizer",
+                             domain: str = "GLOBAL",
+                             thresh: str = "90",
+                             window: Optional[str] = "3",
+                             csv_dir: Optional[str] = None,
+                             output_dir: Optional[str] = None,
+                             metric: str = "fss",) -> Optional[str]:
         """
-        This method reads per-experiment CSV files from ``csv_dir``, filters rows to the specified ``domain``, ``thresh`` and ``window``, computes the mean metric per lead time, and overlays a line for each experiment in a single figure. The figure is saved to ``output_dir`` using a filename convention that encodes metric, domain, threshold and window. If no CSV files are present or no matching rows are found the method returns ``None``.
+        This method generates a line plot of the specified metric versus lead time for all experiments that have matching data in their per-experiment CSV files. It reads each CSV file, filters and aggregates the metric values by lead time based on the specified domain, threshold and window criteria, and plots the mean metric values for each experiment on a shared axis. The method dynamically sets y-axis limits based on the range of metric values across all experiments, applies sensible lead-time ticks, and saves the resulting plot as a PNG file with a descriptive filename. If no CSV files are found or if no matching data is available for the specified criteria, the method logs a warning and returns ``None`` to indicate that no plot was generated. 
 
         Parameters:
             domain (str): Verification domain name to filter by (e.g. "GLOBAL").
@@ -466,18 +463,16 @@ class Visualizer:
         return out
 
 
-    def plot_fss_difference(
-        self,
-        control_experiment: str,
-        domain: str = "GLOBAL",
-        thresh: str = "90",
-        window: Optional[str] = "3",
-        csv_dir: Optional[str] = None,
-        output_dir: Optional[str] = None,
-        metric: str = "fss",
-    ) -> Optional[str]:
+    def plot_fss_difference(self: "Visualizer",
+                            control_experiment: str,
+                            domain: str = "GLOBAL",
+                            thresh: str = "90",
+                            window: Optional[str] = "3",
+                            csv_dir: Optional[str] = None,
+                            output_dir: Optional[str] = None,
+                            metric: str = "fss",) -> Optional[str]:
         """
-        This method computes the mean metric per lead time for the specified control experiment and then computes signed differences for every other experiment at common lead times. Difference curves are plotted and saved as a PNG file. If CSVs are missing or the control file has no matching rows the method returns ``None``.
+        This method generates a line plot of the difference in the specified metric versus lead time between each experiment and a designated control experiment. It reads each CSV file, filters and aggregates the metric values by lead time based on the specified domain, threshold and window criteria, and computes the difference between each experiment's metric series and the control experiment's metric series at common lead times. The method dynamically sets y-axis limits based on the range of difference values across all experiments, applies sensible lead-time ticks, and saves the resulting difference plot as a PNG file with a descriptive filename. If the control experiment's CSV file is missing or contains no matching data for the specified criteria, or if no other experiments have matching data, the method logs a warning and returns ``None`` to indicate that no plot was generated. 
 
         Parameters:
             control_experiment (str): Name of the baseline experiment (its CSV file must exist in ``csv_dir``).
@@ -607,15 +602,13 @@ class Visualizer:
         return out
 
 
-    def plot_horizontal_map(
-        self,
-        field: xr.DataArray,
-        title: str = "",
-        output_path: Optional[str] = None,
-        **kwargs,
-    ) -> Optional[str]:
+    def plot_horizontal_map(self: "Visualizer",
+                            field: xr.DataArray,
+                            title: str = "",
+                            output_path: Optional[str] = None,
+                            **kwargs,) -> Optional[str]:
         """
-        This method displays a two-dimensional :class:`xarray.DataArray` on a PlateCarree map with coastline, country borders and gridlines. If Cartopy is not installed the function logs a warning and returns ``None`` rather than raising an :class:`ImportError`. The figure is saved to ``output_path`` or the configured plot directory and the saved path is returned.
+        This method generates a horizontal map plot of the provided two-dimensional precipitation or mask field using Cartopy for geospatial plotting. It creates a figure with a PlateCarree projection, plots the field using xarray's built-in plotting method with Cartopy transformation, and adds coastlines, borders and gridlines for geographic context. The method then saves the resulting map as a PNG file to the specified output path or defaults to a standard filename in the configured plot directory. If Cartopy is not installed, the method logs a warning and returns ``None`` to indicate that the horizontal map cannot be generated. 
 
         Parameters:
             field (xarray.DataArray): Two-dimensional precipitation or mask field with latitude and longitude coordinates.
@@ -682,14 +675,12 @@ class Visualizer:
         return output_path
 
 
-    def generate_all_plots(
-        self,
-        csv_dir: Optional[str] = None,
-        output_dir: Optional[str] = None,
-        metrics: Optional[List[str]] = None,
-    ) -> int:
+    def generate_all_plots(self: "Visualizer",
+                           csv_dir: Optional[str] = None,
+                           output_dir: Optional[str] = None,
+                           metrics: Optional[List[str]] = None,) -> int:
         """
-        The method inspects the first available CSV to discover unique domains, thresholds and windows, then enumerates all combinations for the requested metrics and calls :meth:`plot_fss_vs_leadtime` for each combination. Failures for individual combinations are logged as warnings and do not abort the batch. The method returns the number of successfully generated and saved plots.
+        This method generates and saves plots for all combinations of specified metrics, domains, thresholds and windows based on the available data in the per-experiment CSV files. It first discovers the unique values for domains, thresholds and windows from a sample CSV file, then iterates over all combinations of these parameters along with the specified metrics to generate plots using the plot_fss_vs_leadtime method. The method keeps track of how many plots were successfully generated and saved, logs progress and any warnings encountered during plotting, and returns the total count of generated plots at the end. This function provides a convenient way to batch-generate a comprehensive set of plots for analysis without needing to specify each combination manually. 
 
         Parameters:
             csv_dir (str, optional): Directory containing per-experiment CSV files; defaults to the configured csv_dir when ``None``.
@@ -779,11 +770,10 @@ class Visualizer:
         return count
 
 
-    def list_available_options(
-        self, csv_dir: Optional[str] = None,
-    ) -> Tuple[Optional[List[str]], Optional[List[float]], Optional[List[int]]]:
+    def list_available_options(self: "Visualizer", 
+                               csv_dir: Optional[str] = None,) -> Tuple[Optional[List[str]], Optional[List[float]], Optional[List[int]]]:
         """
-        This helper reads the first CSV file in ``csv_dir`` and extracts the unique values for the ``domain``, ``thresh`` and ``window`` columns. The returned lists are sorted and typed appropriately so callers can iterate deterministically when generating plots or validating available options. If no CSV files are found the function returns a tuple of ``(None, None, None)``.
+        This method lists the available options for verification domains, thresholds and neighborhood window sizes based on the per-experiment CSV files found in the specified directory. It searches for CSV files, loads a sample file to extract unique values for the "domain", "thresh" and "window" columns, and returns these as sorted lists. If no CSV files are found, it returns ``(None, None, None)`` to indicate that no options are available. This function provides a convenient way to discover what parameters can be used for plotting without needing to manually inspect the CSV files. 
 
         Parameters:
             csv_dir (str, optional): Directory containing per-experiment CSV files; defaults to the configured csv_dir when ``None``.

@@ -16,7 +16,7 @@ precip_accum_hours: 0  # 0 = same as forecast_step_hours; set to e.g. 3 for 3h a
 
 # ---- MPAS mesh settings ------------------------------------------------
 mpas_grid_file: ""  # path to MPAS grid file (relative to base_dir)
-mpas_remap_resolution: 0.1  # degrees for MPAS-to-latlon remapping
+mpas_remap_resolution: 1.0  # degrees for MPAS-to-latlon remapping
 
 # ---- grid / resolution ------------------------------------------------
 # "obs" = keep the observation grid; or a float (e.g. 0.25)
@@ -27,7 +27,7 @@ vxdomain:
   - "GLOBAL"
 
 regions:
-  SINGV:     "singv_domain_mask.nc"
+  SINGV:     "SINGV.nc"
   TROPICS:   "G004_TROPICS.nc"
   GLOBAL:    "G004_GLOBAL.nc"
   AFRICA:    "G004_AFRICA.nc"
@@ -75,7 +75,7 @@ plot_dir:   "plots"
 
 # ---- filename templates ------------------------------------------------
 observation_template: >-
-  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X3600Y1800.R0p1.FMT.nc
+  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc
 
 obs_vintage_preference:
   - "FNL"

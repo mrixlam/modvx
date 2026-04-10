@@ -3,7 +3,7 @@
 """
 Shared utility functions for MODvx.
 
-This module contains helper functions for parsing datetime strings, formatting threshold values for filenames, iterating over valid times and forecast cycle starts, normalizing longitude coordinates, standardizing coordinate names, and extracting metadata from filenames. These utilities are used across multiple components of the MODvx pipeline to ensure consistent handling of common tasks related to time management, file naming conventions, and data array manipulation. By centralizing these functions, we promote code reuse and maintainability throughout the verification workflow.
+This module contains helper functions for parsing datetime strings, formatting threshold values for filenames, iterating over valid times and forecast cycle starts, normalizing longitude coordinates, standardizing latitude/longitude dimension names, and extracting metadata from standardized FSS and contingency NetCDF filenames. These utilities are used across multiple components of the MODvx pipeline to ensure consistent handling of common tasks such as datetime parsing, filename conventions, and coordinate normalization. The functions are designed to be robust and flexible, supporting multiple input formats and providing clear error messages when inputs do not conform to expected patterns. By centralizing these common operations, this module promotes code reuse and maintainability across the MODvx codebase.
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -22,16 +22,13 @@ from typing import Generator
 
 def parse_datetime_string(datetime_str: str) -> datetime.datetime:
     """
-    Parse a datetime string in one of several recognised formats into a Python datetime object. Accepted formats include the compact ``yyyymmddThh`` notation and ISO-8601 variants with full time components. The function tries each format sequentially and returns on the first successful parse. A descriptive ValueError is raised with the offending string when none of the formats match, guiding the user toward the expected input.
+    This function attempts to parse a human-readable datetime string into a datetime object. It supports multiple common formats, including ``yyyymmddThh`` (e.g. ``20250613T00``) and ISO-8601 format (e.g. ``2025-06-13T00:00:00``). The function iterates through a predefined list of datetime formats and tries to parse the input string with each format until a successful parse is achieved. If none of the formats match the input string, a ValueError is raised with a descriptive message indicating the expected formats. This flexible parsing approach allows the function to handle various datetime string formats commonly used in meteorological data processing while providing clear feedback when inputs do not conform to expected patterns. 
 
     Parameters:
         datetime_str (str): Human-readable datetime string in ``yyyymmddThh`` or ISO-8601 format (e.g. ``"20250613T00"`` or ``"2025-06-13T00:00:00"``).
 
     Returns:
         datetime.datetime: Parsed datetime object corresponding to the input string.
-
-    Raises:
-        ValueError: When the input string does not match any recognised datetime format.
     """
     # Define a list of datetime formats 
     datetime_list = [
@@ -49,13 +46,13 @@ def parse_datetime_string(datetime_str: str) -> datetime.datetime:
 
     # Return a ValueError with a descriptive message if none of the formats match the input string
     raise ValueError(
-        f"Invalid datetime format: {datetime_str!r}. Expected yyyymmddThh (e.g. 20250613T00)"
+        f"Invalid datetime format: {datetime_str!r}. Expected yyyymmddThh (e.g. 20250613T00) or ISO-8601 format (e.g. 2025-06-13T00:00:00)."
     )
 
 
 def format_threshold_for_filename(threshold: float) -> str:
     """
-    Convert a floating-point percentile threshold value to a filename-safe string. The decimal point is replaced by the letter ``p`` so that the value can be safely embedded in file and directory names without triggering path separator issues. For example, ``97.5`` becomes ``"97p5"`` and ``90.0`` becomes ``"90p0"``. The reverse transformation is applied when reading filenames in parse_filename_metadata.
+    This function formats a threshold value for use in filenames by converting it to a string and replacing the decimal point with 'p'. This is necessary because decimal points can cause issues in filenames on some operating systems. For example, a threshold of 97.5 would be converted to "97p5". This function ensures that threshold values can be safely included in filenames while still being human-readable. 
 
     Parameters:
         threshold (float): Percentile threshold value (e.g., 97.5, 90.0).
@@ -67,13 +64,11 @@ def format_threshold_for_filename(threshold: float) -> str:
     return str(threshold).replace(".", "p")
 
 
-def iterate_valid_times(
-    start: datetime.datetime,
-    end: datetime.datetime,
-    step: datetime.timedelta,
-) -> Generator[datetime.datetime, None, None]:
+def iterate_valid_times(start: datetime.datetime,
+                        end: datetime.datetime,
+                        step: datetime.timedelta,) -> Generator[datetime.datetime, None, None]:
     """
-    Yield forecast valid-time datetimes over a specified range using a fixed step interval. Generation starts at *start* (inclusive) and stops before *end* (exclusive), advancing by *step* on each iteration. This generator is used to enumerate every valid time within a single forecast cycle. The calling code controls the range bounds to align with the configured forecast length and step size.
+    This generator function yields valid time datetimes starting from the given start datetime up to but not including the end datetime, with a specified step interval. The function initializes the current time to the start datetime and enters a loop that continues until the current time reaches the end bound. Within the loop, it yields the current time and then increments it by the step interval. This allows callers to iterate over all valid times in a specified range with a consistent interval, which is useful for processing forecast data at regular time steps. The end datetime is exclusive, meaning that if the last valid time falls exactly on the end datetime, it will not be yielded. 
 
     Parameters:
         start (datetime.datetime): First valid time to yield (inclusive).
@@ -92,13 +87,11 @@ def iterate_valid_times(
         current_time += step
 
 
-def iterate_forecast_cycle_starts(
-    start: datetime.datetime,
-    end: datetime.datetime,
-    step: datetime.timedelta,
-) -> Generator[datetime.datetime, None, None]:
+def iterate_forecast_cycle_starts(start: datetime.datetime,
+                                  end: datetime.datetime,
+                                  step: datetime.timedelta,) -> Generator[datetime.datetime, None, None]:
     """
-    Yield forecast cycle-start datetimes over a date range at a fixed interval. Both *start* and *end* are inclusive, so the final cycle is yielded if it falls exactly on *end*. This differs from generate_valid_times, which excludes the end bound. The function is used to enumerate initialisation times for multi-cycle verification experiments where the last cycle must be processed.
+    This generator function yields forecast cycle start datetimes from the specified start to end bounds, inclusive, with a given step interval. The function initializes the current cycle to the start datetime and enters a loop that continues until the current cycle exceeds the end datetime. Within the loop, it yields the current cycle start time and then increments it by the step interval. This allows callers to iterate over all forecast cycle start times within a specified range, which is essential for processing forecast data that is organized by initialization cycles. The end datetime is inclusive, meaning that if a cycle start falls exactly on the end datetime, it will be yielded as well. 
 
     Parameters:
         start (datetime.datetime): First cycle-start datetime to yield (inclusive).
@@ -117,9 +110,10 @@ def iterate_forecast_cycle_starts(
         current_cycle += step
 
 
-def normalize_longitude(data_array: xr.DataArray, target: str = "0_360") -> xr.DataArray:
+def normalize_longitude(data_array: xr.DataArray, 
+                        target: str = "0_360") -> xr.DataArray:
     """
-    Convert the longitude coordinate of a DataArray to either the [0, 360] or [-180, 180] convention. The function operates on the existing ``longitude`` coordinate values before reassigning them to the array. After conversion the DataArray is sorted along the longitude axis to maintain a monotonically increasing coordinate, which is required by interpolation and selection operations downstream. A ValueError is raised for unrecognised target conventions.
+    This function normalizes the longitude coordinate of an xarray DataArray to a specified convention, either "0_360" or "-180_180". It first creates a copy of the longitude coordinate values to avoid modifying the original DataArray. Then, it uses vectorized operations to convert the longitude values to the target convention: for "0_360", it adds 360 to any negative values; for "-180_180", it subtracts 360 from any values greater than 180. After conversion, it assigns the modified longitude values back to the DataArray and sorts the data by longitude in ascending order. This ensures that the longitude coordinates are consistently represented according to the specified convention, which is important for accurate spatial analysis and visualization in meteorological data processing. 
 
     Parameters:
         data_array (xr.DataArray): Input array with a coordinate named ``longitude``.
@@ -148,7 +142,7 @@ def normalize_longitude(data_array: xr.DataArray, target: str = "0_360") -> xr.D
 
 def standardize_coords(data_array: xr.DataArray) -> xr.DataArray:
     """
-    Rename abbreviated latitude/longitude dimension names to their full standard forms. Input arrays may use ``lat``/``lon`` (common in MPAS and many observational datasets) while the rest of the pipeline expects ``latitude``/``longitude``. This function performs that renaming transparently and is a no-op when the standard names are already present, making it safe to apply unconditionally to any incoming DataArray.
+    This function standardizes the latitude and longitude dimension names of an xarray DataArray to "latitude" and "longitude", respectively. It checks if the DataArray has dimensions named "lat" or "lon" and creates a renaming mapping accordingly. If any renaming is needed, it applies the renaming to the DataArray. This ensures that all DataArrays have consistent dimension names for latitude and longitude, which is important for interoperability across different datasets and components of the MODvx pipeline. By standardizing coordinate names, this function promotes code reuse and reduces the likelihood of errors due to inconsistent dimension naming conventions in different datasets. 
 
     Parameters:
         data_array (xr.DataArray): Input array potentially using abbreviated ``lat``/``lon`` dimension names.
@@ -177,7 +171,7 @@ def standardize_coords(data_array: xr.DataArray) -> xr.DataArray:
 
 def parse_fss_filename_metadata(filename: str) -> dict | None:
     """
-    Extract domain, threshold, and window metadata from a standardised FSS NetCDF filename. The expected filename pattern is ``modvx_metrics_type_neighborhood_<domain>_<Nh>h_indep_thresh<T>percent_window<W>.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). This function is used during CSV extraction to parse result files without opening them. Returns ``None`` when the filename does not conform to the expected pattern.
+    This function extracts domain, threshold, and window metadata from a standardized FSS NetCDF filename. The expected filename pattern is ``modvx_metrics_type_neighborhood_<domain>_<Nh>h_indep_thresh<T>percent_window<W>.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). The function uses regular expressions to parse the filename and extract the relevant metadata components. If the filename does not conform to the expected pattern or if any of the required components cannot be extracted, the function returns ``None`` to indicate that parsing was unsuccessful. This allows calling code to handle unparseable filenames gracefully, such as by skipping them or logging a warning. When parsing is successful, the function returns a dictionary containing the extracted metadata values for domain, threshold, and window size, which can be used for further processing or analysis in the MODvx pipeline. 
 
     Parameters:
         filename (str): NetCDF filename to parse, with or without the ``.nc`` extension.
@@ -224,7 +218,7 @@ def parse_fss_filename_metadata(filename: str) -> dict | None:
 
 def parse_contingency_filename_metadata(filename: str) -> dict | None:
     """
-    Extract domain and threshold metadata from a standardised contingency NetCDF filename. The expected filename pattern is ``modvx_metrics_type_contingency_<domain>_<Nh>h_indep_thresh<T>percent.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). Returns ``None`` when the filename does not conform to the expected pattern.
+    This function extracts domain and threshold metadata from a standardized contingency NetCDF filename. The expected filename pattern is ``modvx_metrics_type_contingency_<domain>_<Nh>h_indep_thresh<T>percent.nc``, where threshold values may use ``p`` in place of ``.`` (e.g. ``97p5`` for 97.5). The function uses regular expressions to parse the filename and extract the relevant metadata components. If the filename does not conform to the expected pattern or if any of the required components cannot be extracted, the function returns ``None`` to indicate that parsing was unsuccessful. This allows calling code to handle unparseable filenames gracefully, such as by skipping them or logging a warning. When parsing is successful, the function returns a dictionary containing the extracted metadata values for domain and threshold, which can be used for further processing or analysis in the MODvx pipeline. 
 
     Parameters:
         filename (str): NetCDF filename to parse, with or without the ``.nc`` extension.
@@ -261,7 +255,7 @@ def parse_contingency_filename_metadata(filename: str) -> dict | None:
 
 def extract_lead_time_hours_from_path(path_str: str) -> int | None:
     """
-    Extract the lead-time hour value from a ``pp##h`` token embedded in a file path string. Lead times are encoded as directory components like ``pp12h`` or ``pp24h`` within the output directory hierarchy. This function locates the first such token and returns the integer hour value. Returns ``None`` when no matching token is found, allowing callers to skip files that do not follow the expected naming scheme.
+    This function extracts the lead-time in hours from a file path string that contains a token in the format ``pp##h``, where ``##`` represents the lead-time hour value. The function uses a regular expression to search for this pattern within the input string. If a match is found, it extracts the numeric portion representing the lead-time hours, converts it to an integer, and returns it. If no such pattern is found in the input string, the function returns ``None`` to indicate that the lead-time could not be extracted. This utility is useful for parsing file paths that encode lead-time information in their naming convention, allowing downstream code to programmatically determine the forecast lead-time associated with a given file. 
 
     Parameters:
         path_str (str): File path string potentially containing a ``pp##h`` lead-time token.

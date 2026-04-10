@@ -1,0 +1,63 @@
+# Configuration for mri_test experiment: native MPAS unstructured mesh
+# Uses mpasdiag for direct reading of MPAS diag files (no convert-mpas needed)
+
+experiment_name: "mrislam_coldstart_240km_meso"
+
+# MPAS mesh settings
+mpas_grid_file: "grid/x1.10242.static.nc"
+mpas_remap_resolution: 0.5  # degrees for MPAS-to-latlon remapping
+
+# Cycle range (5 cycles available: 2024091700 – 2024092100)
+initial_cycle_start: "20140901T00"
+final_cycle_start:   "20140902T00"
+
+# MPAS diag files are hourly; accumulate over 1h windows
+forecast_step_hours:         1
+observation_interval_hours:  1
+cycle_interval_hours:        6
+forecast_length_hours:       12
+precip_accum_hours:          3  # 0 = same as forecast_step_hours; set to 3 for 3h accum
+
+# Grid — regrid to obs grid after MPAS remapping
+target_resolution: "fcst"
+
+# Verification domain
+vxdomain:
+  - "GLOBAL"
+
+# Parameter sweep
+thresholds:
+  - 90.0
+  - 95.0
+  - 97.5
+  - 99.0
+window_sizes:
+  - 1
+  - 3
+  - 5
+  - 7
+  - 9
+  - 11
+  - 13
+  - 15
+
+# Variable names (obs loading)
+obs_var_name: "precip"
+
+# Directories (relative to base_dir)
+base_dir: "data"
+fcst_dir: "fcst"
+obs_dir:  "obs"
+mask_dir: "masks"
+output_dir: "output"
+debug_dir: "debug"
+
+# Obs vintage preference
+obs_vintage_preference:
+  - "FNL"
+  - "LTE"
+
+# Runtime
+verbose: false
+save_intermediate: true
+enable_logs: false

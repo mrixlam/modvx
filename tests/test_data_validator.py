@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Tests for modvx.data_validator — grid preparation pipeline.
+Tests for the DataValidator class in the MODvx package. 
 
-This module contains unit tests for the DataValidator class, which performs the critical task of preparing forecast and observation data for verification. The tests cover each step of the grid preparation pipeline. 
+This module contains unit tests for the various methods of the DataValidator class, which is responsible for preparing forecast and observation data for verification. The tests cover coordinate standardization, mask extent computation, observation clipping, regridding to a common grid, and application of the verification mask. Each test verifies that the expected transformations are applied correctly to synthetic input data, ensuring that the DataValidator functions as intended before being used in the full verification pipeline. 
 
 Author: Rubaiat Islam
 Institution: Mesoscale & Microscale Meteorology Laboratory, NCAR
@@ -25,7 +25,10 @@ from modvx.data_validator import DataValidator
 @pytest.fixture
 def dv() -> DataValidator:
     """
-    Construct a DataValidator instance backed by default ModvxConfig settings. This fixture provides a ready-to-use validator object for tests that require an instantiated class rather than calling static methods directly. It relies on ModvxConfig's defaults, so tests using this fixture do not depend on any filesystem state or YAML configuration files.
+    This fixture provides a DataValidator instance configured with default settings for use in multiple test cases. By centralizing the creation of the DataValidator, we ensure that all tests operate with a consistent configuration and avoid redundant setup code. The default ModvxConfig can be customized in individual tests if needed by creating a new DataValidator instance with specific parameters. 
+
+    Parameters:
+        None
 
     Returns:
         DataValidator: A validator instance configured with default settings.
@@ -36,9 +39,12 @@ def dv() -> DataValidator:
 class TestPrepareObsCoords:
     """ Tests for prepare_observation_coordinates verifying that coordinate renaming and longitude wrapping are performed correctly. """
 
-    def test_renames_lat_lon(self) -> None:
+    def test_renames_lat_lon(self: "TestPrepareObsCoords") -> None:
         """
-        Confirm that prepare_observation_coordinates renames 'lat'/'lon' dimension names to 'latitude'/'longitude'. This test constructs a minimal DataArray with short-form coordinate names and asserts that the output uses the canonical long-form names expected by downstream pipeline components. Correct renaming is critical for consistent coordinate access across forecast and observation grids.
+        This test verifies that prepare_observation_coordinates correctly renames latitude and longitude dimensions to 'latitude' and 'longitude'. It creates a DataArray with non-standard dimension names ('lat', 'lon') and checks that the output dimensions are renamed as expected. Proper coordinate naming is essential for downstream processing steps that rely on standard dimension names. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -52,9 +58,12 @@ class TestPrepareObsCoords:
         assert "latitude" in result.dims
         assert "longitude" in result.dims
 
-    def test_negative_lon_converted(self) -> None:
+    def test_negative_lon_converted(self: "TestPrepareObsCoords") -> None:
         """
-        Verify that negative longitude values are converted to the [0, 360) range after coordinate preparation. This test supplies a DataArray with longitude coordinates spanning negative values and asserts the output minimum longitude is non-negative. Consistent positive-only longitude representation prevents misalignment when overlaying forecast and observation grids that may use different longitude conventions.
+        This test checks that prepare_observation_coordinates converts negative longitudes to the 0-360 range. It creates a DataArray with longitude coordinates that include negative values and asserts that the minimum longitude in the output is non-negative. Proper longitude wrapping is crucial for ensuring that observations align correctly with forecast grids, especially when verifying over global domains. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -71,9 +80,12 @@ class TestPrepareObsCoords:
 class TestMaskExtent:
     """ Tests for compute_mask_extent verifying correct bounding box extraction from a binary mask and error handling for empty masks. """
 
-    def test_valid_extent(self) -> None:
+    def test_valid_extent(self: "TestMaskExtent") -> None:
         """
-        Verify that get_mask_extent correctly identifies the bounding box of non-zero mask cells. This test builds a 2×3 binary mask with ones at known coordinates and checks that the returned lat/lon extents match the coordinates of those active cells, excluding zero-value positions. Accurate extent extraction is required to properly clip observation data before regridding.
+        This test verifies that compute_mask_extent correctly identifies the bounding box of non-zero cells in a binary mask. It creates a 2×3 mask with a specific pattern of zeros and ones, then asserts that the computed latitude and longitude extents match the expected values. Accurate bounding box extraction is necessary for efficient clipping of observation data to the relevant verification region, reducing computational load in subsequent steps. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -89,9 +101,12 @@ class TestMaskExtent:
         assert lon_min == 110
         assert lon_max == 120
 
-    def test_empty_mask_raises(self) -> None:
+    def test_empty_mask_raises(self: "TestMaskExtent") -> None:
         """
-        Ensure that get_mask_extent raises a ValueError when the supplied mask contains no non-zero cells. This test provides an all-zeros mask and expects the function to fail loudly with a message matching 'No valid points', guarding against silent downstream errors when an empty or misconfigured mask is loaded. Explicit failure on an empty mask surfaces configuration problems early in pipeline execution.
+        This test checks that compute_mask_extent raises a ValueError when the input mask contains no non-zero cells. It creates a 2×3 mask of all zeros and asserts that the expected exception is raised with an appropriate error message. Proper error handling for empty masks prevents downstream processing from proceeding with invalid spatial extents, which could lead to misleading verification results or runtime errors.
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -108,9 +123,10 @@ class TestMaskExtent:
 class TestClipObservations:
     """ Tests for clip_observations verifying that the output spatial extent includes the specified buffer padding beyond the mask-derived bounding box. """
 
-    def test_clip_with_buffer(self, dv: DataValidator) -> None:
+    def test_clip_with_buffer(self: "TestClipObservations", 
+                              dv: DataValidator) -> None:
         """
-        Check that clip_observations returns a spatial subset that extends at least one degree beyond the specified bounding box. This test uses a global 1°-resolution observation grid and a narrow lat/lon extent, then asserts that the clipped output covers coordinates outside the exact bounds due to the default buffer padding. Correct buffer handling prevents edge-cut artifacts during subsequent regridding and mask application.
+        This test verifies that clip_observations correctly clips the input observation to an extent that includes the specified buffer padding. It creates a 180×360 observation array with regular latitude and longitude coordinates, then calls the clipping method with a bounding box and buffer. The test asserts that the minimum and maximum latitude of the clipped output extend beyond the original bounding box by at least the buffer amount. Ensuring that the clipping includes the buffer is important for avoiding edge effects in verification when observations near the boundary of the mask are relevant.
 
         Parameters:
             dv (DataValidator): DataValidator fixture configured with default ModvxConfig settings.
@@ -135,9 +151,12 @@ class TestClipObservations:
 class TestRegrid:
     """ Tests for regrid_to_common_grid verifying that forecast and observation arrays are resampled to matching shapes based on the specified target resolution. """
 
-    def test_obs_target(self) -> None:
+    def test_obs_target(self: "TestRegrid") -> None:
         """
-        Verify that when target is set to 'obs', the forecast array is interpolated to match the shape of the observation grid. This test constructs a coarser 5×5 forecast and a finer 3×3 observation array and asserts the regridded forecast output has the same shape as the observation. Matching grid shapes is a prerequisite for element-wise FSS binary mask and fractional field computation.
+        This test verifies that regrid_to_common_grid with target_resolution='obs' resamples the forecast to the observation grid shape. It creates a coarse 5×5 forecast grid and a finer 3×3 observation grid, then asserts that the returned forecast array has the same shape as the observation array. Correct 'obs' target behavior is required when the pipeline is configured to verify on the observation grid rather than the native model grid. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -155,9 +174,12 @@ class TestRegrid:
         fr, or_ = DataValidator.regrid_to_common_grid(fcst, obs, "obs", 0, 4, 0, 4)
         assert fr.shape == obs.shape
 
-    def test_numeric_resolution(self) -> None:
+    def test_numeric_resolution(self: "TestRegrid") -> None:
         """
-        Verify that passing a numeric resolution value causes both grids to be resampled to a shared common grid. This test supplies identical 10×10 grids and a resolution of 2.0 degrees, then asserts the two output arrays have the same shape. Ensuring equal output shapes for numeric resolution targets is necessary before computing fraction fields over paired grid cells.
+        This test verifies that regrid_to_common_grid with a numeric target_resolution resamples both forecast and observation to matching shapes on a common grid. It creates two 10×10 grids at 1°-resolution and requests resampling to a 2°-resolution common grid, then asserts that the two output arrays have equal shapes. Equal output shapes for numeric resolution targets are required before computing fraction fields over paired grid cells. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -179,9 +201,12 @@ class TestRegrid:
 class TestApplyMask:
     """ Tests for apply_verification_mask verifying that values outside the mask are set to NaN while values inside the mask are retained. """
 
-    def test_nan_outside_mask(self) -> None:
+    def test_nan_outside_mask(self: "TestApplyMask") -> None:
         """
-        Confirm that apply_verification_mask sets values to NaN at positions where the mask is zero. This test constructs an all-ones 3×3 field and a diagonal binary mask, then asserts that off-diagonal positions become NaN while diagonal positions retain the original 1.0 value. Proper NaN masking ensures that FSS computation is restricted to the intended verification region and does not include points outside the domain.
+        This test verifies that apply_verification_mask correctly applies NaN masking based on the provided binary mask. It creates a 3×3 forecast and observation field of ones, along with a mask that has ones on the diagonal and zeros elsewhere. The test asserts that the masked forecast has NaN values at the positions where the mask is zero and retains the original values where the mask is one. Proper mask application is essential for ensuring that only valid grid points are included in verification calculations. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -210,14 +235,12 @@ class TestApplyMask:
 class TestRegridToTargetFcst:
     """ Tests for regrid_to_common_grid with target_resolution='fcst' verifying that the forecast grid shape is preserved after regridding to the observation grid. """
 
-    def _make_grid(
-        self,
-        lat_range: tuple = (0, 5),
-        lon_range: tuple = (0, 5),
-        step: float = 1.0,
-    ) -> xr.DataArray:
+    def _make_grid(self: "TestRegridToTargetFcst",
+                   lat_range: tuple = (0, 5),
+                   lon_range: tuple = (0, 5),
+                   step: float = 1.0,) -> xr.DataArray:
         """
-        Build a synthetic 2-D DataArray with regular latitude/longitude coordinates for grid operation tests. The array is populated with random values drawn from a fixed random seed to ensure reproducibility across test runs. Latitude and longitude ranges and step size are configurable so both coarse and fine grid resolutions can be produced with a single call.
+        This helper method creates a synthetic 2-D DataArray with specified latitude and longitude ranges and grid spacing. The generated grid contains random values and is used in the regridding tests to simulate forecast and observation fields. By adjusting the lat_range, lon_range, and step parameters, we can create grids of varying resolutions and extents to thoroughly test the regridding functionality. 
 
         Parameters:
             lat_range (tuple): Two-element (min, max) latitude extent in degrees. Defaults to (0, 5).
@@ -236,9 +259,12 @@ class TestRegridToTargetFcst:
             coords={"latitude": lats, "longitude": lons},
         )
 
-    def test_regrid_to_target_fcst(self) -> None:
+    def test_regrid_to_target_fcst(self: "TestRegridToTargetFcst") -> None:
         """
-        Verify that regrid_to_target with target_resolution='fcst' resamples the observation to the forecast grid shape. This test uses a coarse 1°-resolution forecast grid and a finer 0.5°-resolution observation grid, then asserts that the returned forecast array retains the original forecast shape. Correct 'fcst' target behavior is required when the pipeline is configured to verify on the native model grid rather than the observation grid.
+        This test verifies that regrid_to_common_grid with target_resolution='fcst' preserves the forecast grid shape after regridding to the observation grid. It creates a 5×5 forecast grid and a finer 3×3 observation grid, then asserts that the returned forecast array has the same shape as the original forecast array. Preserving the forecast grid shape is important when the verification is configured to operate on the native model grid rather than resampling to the observation grid. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -249,9 +275,12 @@ class TestRegridToTargetFcst:
         f_r, o_r = dv.regrid_to_common_grid(fcst, obs, "fcst", 0.0, 5.0, 0.0, 5.0)
         assert f_r.shape == fcst.shape
 
-    def test_regrid_to_target_numeric(self) -> None:
+    def test_regrid_to_target_numeric(self: "TestRegridToTargetFcst") -> None:
         """
-        Verify that a numeric resolution target resamples both grids to matching shapes on a common grid. This test supplies two grids at 1°-resolution and requests resampling to a 2°-resolution common grid, then asserts the two output arrays have equal shapes. Equal output shapes for numeric resolution targets are required before computing fraction fields over paired grid cells.
+        This test verifies that regrid_to_common_grid with a numeric target_resolution resamples both forecast and observation to matching shapes on a common grid. It creates two 10×10 grids at 1°-resolution and requests resampling to a 2°-resolution common grid, then asserts that the two output arrays have equal shapes. Equal output shapes for numeric resolution targets are required before computing fraction fields over paired grid cells. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -266,9 +295,12 @@ class TestRegridToTargetFcst:
 class TestApplyVerificationMaskNumeric:
     """ Tests for apply_verification_mask with numeric target_resolution verifying NaN masking behavior. """
 
-    def test_apply_verification_mask_numeric(self) -> None:
+    def test_apply_verification_mask_numeric(self: "TestApplyVerificationMaskNumeric") -> None:
         """
-        Verify that apply_verification_mask correctly applies NaN masking when target_resolution is numeric. This test constructs matching 6×6 forecast and observation fields, zeros out the first row of the mask, and then asserts that the masked forecast has NaN at that row and retains values elsewhere. Testing the numeric resolution path ensures that mask application is consistent with the 'obs' and 'fcst' string resolution targets.
+        This test verifies that apply_verification_mask correctly applies NaN masking based on the provided binary mask when using a numeric target_resolution. It creates a 6×6 forecast and observation field of ones, along with a mask that has ones in the first row and zeros elsewhere. The test asserts that the masked forecast has NaN values in the rows where the mask is zero and retains the original values in the row where the mask is one. Proper mask application is essential for ensuring that only valid grid points are included in verification calculations, especially when resampling to a common grid with a specified resolution. 
+
+        Parameters:
+            None
 
         Returns:
             None
@@ -296,9 +328,12 @@ class TestApplyVerificationMaskNumeric:
 class TestPreparePipeline:
     """ Integration test for the full prepare() pipeline from raw forecast and observation arrays through to masked, regridded output. """
 
-    def test_prepare_full_pipeline(self) -> None:
+    def test_prepare_full_pipeline(self: "TestPreparePipeline") -> None:
         """
-        Exercise the full prepare() pipeline from raw forecast and observation arrays through to masked, regridded output. This integration test constructs synthetic 21×21-latitude grids centred on the antimeridian to exercise longitude-wrapping edge cases, along with an all-ones mask. It then calls prepare() and asserts that the returned forecast and observation shapes match, confirming that clipping, regridding, and mask application all compose correctly without raising exceptions.
+        This test verifies the full prepare() pipeline of the DataValidator class, which includes standardizing observation coordinates, computing mask extent, clipping observations to the buffered extent, regridding to a common grid based on the target resolution, and applying the verification mask. It creates synthetic forecast and observation arrays with known shapes and a simple binary mask, then asserts that the final prepared forecast and observation arrays have matching shapes. This end-to-end test ensures that all components of the preparation pipeline work together correctly to produce valid inputs for FSS computation.
+
+        Parameters:
+            None
 
         Returns:
             None

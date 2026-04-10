@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -36,9 +35,10 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend for CI
 
 
-def _make_csv(csv_dir: Path, experiment: str = "exp1") -> Path:
+def _make_csv(csv_dir: Path, 
+              experiment: str = "exp1") -> Path:
     """
-    Create a minimal CSV file mimicking the output of extract_fss_to_csv for use in plot tests. The file contains six lead-time rows with realistic FSS, POD, FAR, CSI, FBIAS, and ETS values for a single GLOBAL domain entry at 90th-percentile threshold and window size 3. This shared helper avoids repeating DataFrame construction boilerplate across every visualizer test fixture.
+    This helper function creates a synthetic CSV file with both FSS and continuous metrics for testing. The CSV contains six lead times for a single domain, threshold, and window combination, with made-up metric values that increase over lead time. The function ensures the output directory exists, writes the combined DataFrame to a CSV file named after the experiment, and returns the path to the created file. 
 
     Parameters:
         csv_dir (Path): Directory in which the CSV file will be written; created if absent.
@@ -83,7 +83,7 @@ def _make_csv(csv_dir: Path, experiment: str = "exp1") -> Path:
 @pytest.fixture
 def viz_setup(tmp_path: Path) -> tuple:
     """
-    Create a Visualizer backed by real CSV data and pre-created output directories for plot tests. The fixture writes one CSV file via _make_csv, builds a ModvxConfig pointing at the temporary directories, and constructs a Visualizer instance. The returned tuple gives tests direct access to the Visualizer, the CSV directory, and the plot output directory without re-creating them.
+    This fixture sets up a Visualizer instance with a realistic CSV file for testing. It creates a temporary CSV directory and plot output directory within the pytest-provided tmp_path, generates a synthetic CSV file using _make_csv, and initializes a Visualizer with a ModvxConfig pointing to these directories. The fixture returns the Visualizer instance along with the paths to the CSV and plot directories for use in tests. 
 
     Parameters:
         tmp_path (Path): Pytest-supplied per-test temporary directory.
@@ -107,9 +107,12 @@ def viz_setup(tmp_path: Path) -> tuple:
 class TestConstants:
     """ Verify module-level metric constants are defined correctly. """
 
-    def test_all_metrics_list(self) -> None:
+    def test_all_metrics_list(self: "TestConstants") -> None:
         """
-        Verify that the _ALL_METRICS constant contains 'fss' and lists exactly six metric keys. The six canonical metrics are fss, pod, far, csi, fbias, and ets. Having a fixed count guards against accidental deletion or duplication when new metrics are added to the module.
+        This test verifies that the _ALL_METRICS list includes 'fss' and contains exactly six metrics. The presence of 'fss' confirms that the primary metric is included, while the length check ensures no extra or missing metrics have been introduced. This guards against accidental changes to the supported metric set that could break plotting or labeling logic.
+
+        Parameters:
+            self (TestConstants): The test class instance.
 
         Returns:
             None
@@ -117,9 +120,12 @@ class TestConstants:
         assert "fss" in _ALL_METRICS
         assert len(_ALL_METRICS) == 6
 
-    def test_metric_labels(self) -> None:
+    def test_metric_labels(self: "TestConstants") -> None:
         """
-        Verify that every metric listed in _ALL_METRICS has a corresponding entry in _METRIC_LABELS. Plot axis titles are generated from this mapping, so a missing label would silently fall back to the raw key string. This test iterates over all known metrics and confirms each one is present as a key in the label dictionary.
+        This test verifies that every metric in _ALL_METRICS has a corresponding entry in the _METRIC_LABELS dictionary. This ensures that all supported metrics have defined human-readable labels for plotting and display purposes, preventing KeyErrors during label lookups and ensuring consistent presentation of metric names.
+
+        Parameters:
+            self (TestConstants): The test class instance.
 
         Returns:
             None
@@ -127,9 +133,12 @@ class TestConstants:
         for m in _ALL_METRICS:
             assert m in _METRIC_LABELS
 
-    def test_bounded_metrics(self) -> None:
+    def test_bounded_metrics(self: "TestConstants") -> None:
         """
-        Verify that _BOUNDED_METRICS includes 'fss' but not 'fbias'. Bounded metrics receive clamped y-axis limits of [0, 1] during plotting, while unbounded metrics such as FBIAS can exceed 1 and should not be constrained. This test confirms the expected membership for the two representative metrics.
+        This test verifies that the _BOUNDED_METRICS set includes 'fss' but does not include 'fbias'. Bounded metrics like 'fss' receive y-axis limits of [0, 1] during plotting, while unbounded metrics like 'fbias' do not. This test confirms that the correct metrics are classified as bounded or unbounded, which is critical for proper plot scaling and visualization. 
+
+        Parameters:
+            self (TestConstants): The test class instance.
 
         Returns:
             None
@@ -141,9 +150,12 @@ class TestConstants:
 class TestHelperFilters:
     """ Coverage for internal helper branches. """
 
-    def test_filter_df_matches_window(self) -> None:
+    def test_filter_df_matches_window(self: "TestHelperFilters") -> None:
         """
-        Verify that _filter_df returns only rows matching domain, threshold, and window.
+        This test verifies that the _filter_df method correctly filters a DataFrame based on domain, threshold, and window criteria. The test constructs a simple DataFrame with two rows for the same domain and threshold but different window sizes. When filtering for a specific window size, only the matching row should be returned. This confirms that the filtering logic correctly applies all three criteria to narrow down the DataFrame to the intended subset. 
+
+        Parameters: 
+            self (TestHelperFilters): The test class instance.
 
         Returns:
             None
@@ -157,9 +169,13 @@ class TestHelperFilters:
         assert len(filtered) == 1
         assert int(filtered["window"].iloc[0]) == 3
 
-    def test_aggregate_metric_missing_column(self, tmp_path: Path) -> None:
+    def test_aggregate_metric_missing_column(self: "TestHelperFilters", tmp_path: Path) -> None:
         """
-        Verify that _aggregate_metric returns None when the requested metric column is missing.
+        This test verifies that the _aggregate_metric method returns None when the specified metric column is missing from the CSV data. The test creates a CSV file that includes 'fss' but omits 'pod'. When attempting to aggregate 'pod', the method should detect the missing column and return None rather than raising a KeyError. This ensures robust handling of incomplete or unexpected CSV data without crashing the entire plotting process. 
+
+        Parameters:
+            self (TestHelperFilters): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files.
 
         Returns:
             None
@@ -177,9 +193,13 @@ class TestHelperFilters:
         result = Visualizer._aggregate_metric(csv_dir / "exp1.csv", "GLOBAL", 90.0, 3, "pod")
         assert result is None
 
-    def test_aggregate_metric_window_required(self, tmp_path: Path) -> None:
+    def test_aggregate_metric_window_required(self: "TestHelperFilters", tmp_path: Path) -> None:
         """
-        Verify that _aggregate_metric returns None when window is missing for a window-dependent metric.
+        This test verifies that the _aggregate_metric method returns None when the window parameter is missing for a window-dependent metric. The test creates a CSV file with a window-dependent metric ('fss') and attempts to aggregate it without specifying a window. The method should return None, ensuring that window-dependent metrics are not aggregated without the required window information.
+
+        Parameters:
+            self (TestHelperFilters): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files.
 
         Returns:
             None
@@ -197,9 +217,13 @@ class TestHelperFilters:
         result = Visualizer._aggregate_metric(csv_dir / "exp1.csv", "GLOBAL", 90.0, None, "fss")
         assert result is None
 
-    def test_aggregate_metric_window_independent(self, tmp_path: Path) -> None:
+    def test_aggregate_metric_window_independent(self: "TestHelperFilters", tmp_path: Path) -> None:
         """
-        Verify that _aggregate_metric ignores window for threshold-only metrics.
+        This test verifies that the _aggregate_metric method can successfully aggregate a window-independent metric even when the window parameter is None. The test creates a CSV file with a window-independent metric ('pod') and calls _aggregate_metric without a window. The method should return the correct aggregated value, confirming that window-independent metrics are handled properly without requiring window information. 
+
+        Parameters:
+            self (TestHelperFilters): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files.
 
         Returns:
             None
@@ -218,9 +242,12 @@ class TestHelperFilters:
         assert result is not None
         assert result.iloc[0] == pytest.approx(0.6)
 
-    def test_set_y_limits_no_valid(self) -> None:
+    def test_set_y_limits_no_valid(self: "TestHelperFilters") -> None:
         """
-        Verify that _set_y_limits returns without error when no finite values exist.
+        This test verifies that the _set_y_limits method does not raise an exception when given NaN values for a bounded metric. The method should handle the case where no valid metric values are present without crashing, even though it cannot set meaningful limits. This ensures robustness in edge cases where the CSV data may be incomplete or filtered down to an empty set. 
+
+        Parameters:
+            self (TestHelperFilters): The test class instance.
 
         Returns:
             None
@@ -235,9 +262,13 @@ class TestHelperFilters:
 class TestLeadtimeTicks:
     """ Coverage for lead-time tick helpers. """
 
-    def test_leadtime_tick_interval(self, tmp_path: Path) -> None:
+    def test_leadtime_tick_interval(self: "TestLeadtimeTicks", tmp_path: Path) -> None:
         """
-        Verify that lead-time tick intervals follow forecast length rules.
+        This test verifies that the _leadtime_tick_interval method returns the correct tick interval based on the forecast length in hours. The method should return 1 for forecast lengths up to 12 hours, 3 for up to 24 hours, 6 for up to 48 hours, and 12 for longer forecasts. This test creates Visualizer instances with different forecast lengths and asserts that the returned tick interval matches the expected values, ensuring that lead-time ticks are spaced appropriately for different forecast durations. 
+
+        Parameters: 
+            self (TestLeadtimeTicks): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -258,9 +289,13 @@ class TestLeadtimeTicks:
         viz = Visualizer(cfg)
         assert viz._leadtime_tick_interval() == 12
 
-    def test_apply_leadtime_ticks(self, tmp_path: Path) -> None:
+    def test_apply_leadtime_ticks(self: "TestLeadtimeTicks", tmp_path: Path) -> None:
         """
-        Verify that _apply_leadtime_ticks applies ticks using the configured interval.
+        This test verifies that the _apply_leadtime_ticks method correctly sets the x-axis ticks on a Matplotlib axis based on the provided lead times and the configured tick interval. The test creates a Visualizer instance with a 24-hour forecast length, applies lead-time ticks to an axis with lead times from 1 to 24 hours, and asserts that the first tick is approximately 3 hours and the last tick is at least 24 hours. This confirms that the method correctly calculates and applies ticks according to the forecast length and lead time range.
+
+        Parameters:
+            self (TestLeadtimeTicks): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -277,16 +312,16 @@ class TestLeadtimeTicks:
         plt.close(fig)
 
 
-# -----------------------------------------------------------------------
-# plot_fss_vs_leadtime
-# -----------------------------------------------------------------------
-
 class TestPlotFssVsLeadtime:
     """ Tests for plot_fss_vs_leadtime single-metric plot generation. """
 
-    def test_creates_png(self, viz_setup) -> None:
+    def test_creates_png(self: "TestPlotFssVsLeadtime", viz_setup) -> None:
         """
-        Verify that plot_fss_vs_leadtime creates and returns a PNG file path for a valid metric/domain/thresh/window combination. The output directory and CSV source directory are supplied explicitly, and the returned string must end in '.png' and point to a file that actually exists on disk. This confirms the full plot-and-save pipeline runs without error for the nominal case.
+        This test verifies that the plot_fss_vs_leadtime method creates and returns a PNG file path for a valid metric/domain/thresh/window combination. The output directory and CSV source directory are supplied explicitly, and the returned string must end in '.png' and point to a file that actually exists on disk. This confirms the full plot-and-save pipeline runs without error for the nominal case.
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -301,9 +336,13 @@ class TestPlotFssVsLeadtime:
         assert os.path.exists(result)
         assert result.endswith(".png")
 
-    def test_returns_none_no_csvs(self, tmp_path: Path) -> None:
+    def test_returns_none_no_csvs(self: "TestPlotFssVsLeadtime", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_vs_leadtime returns None when the CSV directory is empty or missing. Without any CSV data the method has nothing to plot and should return None to indicate no output was generated, allowing callers to skip downstream file processing for missing data.
+        This test verifies that the plot_fss_vs_leadtime method returns None when the CSV source directory is empty or missing. Without any CSV files to read, the method cannot generate a plot and must return None rather than raising an exception. This ensures that callers can handle the no-data case gracefully without needing to catch exceptions. 
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -316,9 +355,12 @@ class TestPlotFssVsLeadtime:
         )
         assert result is None
 
-    def test_all_metrics_plotted(self, viz_setup) -> None:
+    def test_all_metrics_plotted(self: "TestPlotFssVsLeadtime", viz_setup) -> None:
         """
-        Verify that plot_fss_vs_leadtime can generate plots for all six supported metrics without error. Each metric in _ALL_METRICS is plotted independently for the same domain, threshold, and window combination, and the returned path must be non-None confirming a PNG was saved for every metric. This guards against missing label mappings or unsupported metric names causing silent failures.
+        This test verifies that the plot_fss_vs_leadtime method can generate plots for all metrics listed in _ALL_METRICS without raising exceptions. The test iterates over each metric, calls the plotting method with the same domain/thresh/window, and asserts that a non-None result is returned. This confirms that the plotting logic can handle every supported metric type, including both bounded and unbounded ones, without crashing. 
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
 
         Returns:
             None
@@ -332,8 +374,12 @@ class TestPlotFssVsLeadtime:
             )
             assert result is not None
 
-    def test_bounded_metric_ylim(self, viz_setup) -> None:
-        """ Tests for plot_fss_vs_leadtime verifying that plotting a bounded metric such as 'pod' does not raise an exception. Bounded metrics receive y-axis limits of [0, 1] during plot generation; this test confirms the y-limit clamping logic does not interfere with normal plot creation and that the result path is still returned.
+    def test_bounded_metric_ylim(self: "TestPlotFssVsLeadtime", viz_setup) -> None:
+        """ 
+        This test verifies that the plot_fss_vs_leadtime method applies y-axis limits of [0, 1] for bounded metrics like 'pod'. The test calls the plotting method for 'pod' and checks that the resulting plot file is created successfully. While we cannot directly inspect the plot's y-limits without reading the file, the fact that the method completes without error confirms that the internal logic for setting limits on bounded metrics runs correctly. 
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
 
         Returns:
             None
@@ -347,9 +393,13 @@ class TestPlotFssVsLeadtime:
         )
         assert result is not None
 
-    def test_no_matching_data_returns_plot(self, viz_setup) -> None:
+    def test_no_matching_data_returns_plot(self: "TestPlotFssVsLeadtime", viz_setup) -> None:
         """
-        Verify that plot_fss_vs_leadtime still writes a plot file even when the domain filter matches no rows. When the filtered DataFrame is empty after domain filtering, the method logs a warning and saves an empty plot rather than returning None. This ensures the caller always receives a valid path and does not need to handle the filtered-empty case as a special error condition.
+        This test verifies that the plot_fss_vs_leadtime method returns a PNG file path even when no matching data exists for the specified domain/thresh/window combination. The test calls the method with a non-existent domain, which should result in an empty plot. However, the method should still create and return a PNG file path rather than returning None or raising an exception. This confirms that the plotting pipeline can handle cases with no data gracefully by producing an empty plot instead of failing. 
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -362,9 +412,13 @@ class TestPlotFssVsLeadtime:
         # Plot is still saved (empty), returns the path
         assert result is not None
 
-    def test_window_independent_metric(self, viz_setup) -> None:
+    def test_window_independent_metric(self: "TestPlotFssVsLeadtime", viz_setup) -> None:
         """
-        Verify that plot_fss_vs_leadtime works with window-independent metrics when window is None.
+        This test verifies that the plot_fss_vs_leadtime method can successfully generate a plot for a window-independent metric ('pod') even when the window parameter is None. The test calls the plotting method for 'pod' with window=None and asserts that a PNG file path is returned. This confirms that window-independent metrics do not require a window value and that the plotting logic correctly handles this case without error.
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -378,9 +432,13 @@ class TestPlotFssVsLeadtime:
         assert result is not None
         assert "window" not in os.path.basename(result)
 
-    def test_window_required_missing(self, viz_setup) -> None:
+    def test_window_required_missing(self: "TestPlotFssVsLeadtime", viz_setup) -> None:
         """
-        Verify that plot_fss_vs_leadtime returns None when window is missing for a window-dependent metric.
+        This test verifies that the plot_fss_vs_leadtime method returns None when the window parameter is missing for a window-dependent metric. The test calls the method with window=None for a metric that requires a window, and asserts that the result is None. This confirms that the plotting logic correctly handles the case where a required window value is not provided.
+
+        Parameters:
+            self (TestPlotFssVsLeadtime): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -397,9 +455,13 @@ class TestPlotFssVsLeadtime:
 class TestPlotFssDifference:
     """ Tests for plot_fss_difference (experiment - control) plots. """
 
-    def test_creates_diff_plot(self, tmp_path: Path) -> None:
+    def test_creates_diff_plot(self: "TestPlotFssDifference", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_difference creates a PNG when both control and experiment CSV files exist. The method reads the control and experiment CSVs, computes lead-time differences, and saves a difference plot. This test provides both files and asserts the returned path exists on disk, confirming the full difference-plot pipeline runs correctly.
+        This test verifies that the plot_fss_difference method creates and returns a PNG file path for a valid control experiment and domain/thresh/window combination. The test sets up two CSV files (control and experiment) in the source directory, calls the plotting method with the control experiment name, and asserts that a PNG file is created successfully. This confirms that the method can read both control and experiment data, compute the difference, and generate a plot without error for the nominal case. 
+
+        Parameters:
+            self (TestPlotFssDifference): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -419,9 +481,13 @@ class TestPlotFssDifference:
         assert result is not None
         assert os.path.exists(result)
 
-    def test_returns_none_no_csvs(self, tmp_path: Path) -> None:
+    def test_returns_none_no_csvs(self: "TestPlotFssDifference", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_difference returns None when the CSV source directory is empty or missing. Without any CSV files there is no control or experiment data to compare, so the method must return None rather than raising an exception.
+        This test verifies that the plot_fss_difference method returns None when the CSV source directory is empty or missing. Without any CSV files to read for either the control or experiment, the method cannot compute a difference plot and must return None rather than raising an exception. This ensures that callers can handle the no-data case gracefully without needing to catch exceptions. 
+
+        Parameters:
+            self (TestPlotFssDifference): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -435,9 +501,13 @@ class TestPlotFssDifference:
         )
         assert result is None
 
-    def test_returns_none_missing_control(self, tmp_path: Path) -> None:
+    def test_returns_none_missing_control(self: "TestPlotFssDifference", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_difference returns None when the named control CSV does not exist. If the control experiment file is missing the comparison cannot be performed, so None must be returned instead of raising a FileNotFoundError or KeyError.
+        This test verifies that the plot_fss_difference method returns None when the specified control experiment CSV file is missing from the source directory. The method should attempt to find a CSV file matching the control experiment name, and if it cannot find one, it must return None rather than raising an exception. This ensures that callers can handle the missing control case gracefully without needing to catch exceptions. 
+
+        Parameters:
+            self (TestPlotFssDifference): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -454,9 +524,13 @@ class TestPlotFssDifference:
         )
         assert result is None
 
-    def test_window_required_missing(self, tmp_path: Path) -> None:
+    def test_window_required_missing(self: "TestPlotFssDifference", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_difference returns None when window is missing for a window-dependent metric.
+        This test verifies that the plot_fss_difference method returns None when the window parameter is missing for a window-dependent metric. The method should require a window value for metrics that depend on it, and if it is not provided, it must return None rather than raising an exception. This ensures that callers can handle the missing window case gracefully without needing to catch exceptions.
+
+        Parameters:
+            self (TestPlotFssDifference): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -479,9 +553,13 @@ class TestPlotFssDifference:
 class TestGenerateAllPlots:
     """ Tests for generate_all_plots batch plot generation. """
 
-    def test_generates_all_combos(self, viz_setup) -> None:
+    def test_generates_all_combos(self: "TestGenerateAllPlots", viz_setup) -> None:
         """
-        Verify that generate_all_plots creates a separate PNG for every metric-domain-threshold-window combination. With one domain, one threshold, one window, and six metrics from the CSV, the expected count is 6. This integration test confirms the batch plotting loop iterates correctly over all discovered option combinations without skipping or duplicating any.
+        This test verifies that the generate_all_plots method generates plots for all combinations of metrics, domains, thresholds, and windows discovered in the CSV files. The test uses the standard viz_setup CSV which contains one domain (GLOBAL), one threshold (90.0), and one window (3), along with six metrics. When generate_all_plots is called without a metric filter, it should produce 6 plots (one for each metric) for the single combination of domain/thresh/window. This confirms that the method correctly iterates over all discovered options and generates the expected number of plots.
+
+        Parameters:
+            self (TestGenerateAllPlots): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -493,9 +571,13 @@ class TestGenerateAllPlots:
         # 6 metrics × 1 domain × 1 threshold × 1 window = 6
         assert count == 6
 
-    def test_metric_filter(self, viz_setup) -> None:
+    def test_metric_filter(self: "TestGenerateAllPlots", viz_setup) -> None:
         """
-        Verify that the 'metrics' argument filters generate_all_plots to only the requested metric subset. When metrics=['fss', 'pod'] is supplied, only those two are plotted per combination, yielding 2 plots instead of the full 6. This confirms the filter is applied before the loop rather than generating all plots and discarding the unwanted ones.
+        This test verifies that the generate_all_plots method correctly applies a metric filter to generate only the specified metrics. The test uses the standard viz_setup CSV which contains six metrics, but calls generate_all_plots with a filter for just 'fss' and 'pod'. The method should then produce only 2 plots (one for each of the two specified metrics) for the single combination of domain/thresh/window. This confirms that the metric filtering logic works correctly to limit plot generation to the desired subset of metrics. 
+
+        Parameters:
+            self (TestGenerateAllPlots): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -508,9 +590,13 @@ class TestGenerateAllPlots:
         # 2 metrics × 1 domain × 1 threshold × 1 window = 2
         assert count == 2
 
-    def test_returns_zero_no_csvs(self, tmp_path: Path) -> None:
+    def test_returns_zero_no_csvs(self: "TestGenerateAllPlots", tmp_path: Path) -> None:
         """
-        Verify that generate_all_plots returns 0 when no CSV files exist in the source directory. When list_available_options finds no CSVs it returns None for all option lists, and generate_all_plots should return 0 plots generated rather than raising an exception.
+        This test verifies that the generate_all_plots method returns a count of zero when the CSV source directory is empty or missing. Without any CSV files to read, the method cannot discover any options or generate any plots, and must return 0 rather than raising an exception. This ensures that callers can handle the no-data case gracefully without needing to catch exceptions. 
+
+        Parameters:
+            self (TestGenerateAllPlots): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -520,9 +606,13 @@ class TestGenerateAllPlots:
         count = viz.generate_all_plots(csv_dir=str(tmp_path / "empty"))
         assert count == 0
 
-    def test_window_independent_only(self, tmp_path: Path) -> None:
+    def test_window_independent_only(self: "TestGenerateAllPlots", tmp_path: Path) -> None:
         """
-        Verify that generate_all_plots handles window-independent metrics without requiring window values.
+        This test verifies that the generate_all_plots method can successfully generate plots for a window-independent metric when the window column contains NaN values. The test creates a CSV file with a window-independent metric ('pod') and NaN windows, then calls generate_all_plots with a filter for 'pod'. The method should generate 1 plot for 'pod' despite the NaN windows, confirming that window-independent metrics are handled correctly even when the window column is not populated. 
+
+        Parameters:
+            self (TestGenerateAllPlots): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -550,9 +640,13 @@ class TestGenerateAllPlots:
 class TestListAvailableOptions:
     """ Tests for list_available_options CSV discovery. """
 
-    def test_returns_options(self, viz_setup) -> None:
+    def test_returns_options(self: "TestListAvailableOptions", viz_setup) -> None:
         """
-        Verify that list_available_options correctly extracts domains, thresholds, and window sizes from CSV files. The test uses the standard viz_setup CSV which has one domain (GLOBAL), one threshold (90.0), and one window (3). All three returned lists must match those values exactly, confirming the discovery logic reads and de-duplicates the relevant CSV columns correctly.
+        This test verifies that the list_available_options method correctly extracts domains, thresholds, and window sizes from CSV files. The test uses the standard viz_setup CSV which has one domain (GLOBAL), one threshold (90.0), and one window (3). All three returned lists must match those values exactly, confirming the discovery logic reads and de-duplicates the relevant CSV columns correctly.
+
+        Parameters:
+            self (TestListAvailableOptions): The test class instance.
+            viz_setup (tuple): A fixture providing a Visualizer instance, CSV directory, and plot directory.
 
         Returns:
             None
@@ -563,9 +657,13 @@ class TestListAvailableOptions:
         assert thresholds == [90.0]
         assert windows == [3]
 
-    def test_returns_none_no_csvs(self, tmp_path: Path) -> None:
+    def test_returns_none_no_csvs(self: "TestListAvailableOptions", tmp_path: Path) -> None:
         """
-        Verify that list_available_options returns a triple of None values when no CSV files are present. The absence of CSV files means no options can be discovered, and the caller must receive (None, None, None) so it can skip plot generation cleanly.
+        This test verifies that the list_available_options method returns a triple of None values when no CSV files are present. The absence of CSV files means no options can be discovered, and the caller must receive (None, None, None) so it can skip plot generation cleanly.
+
+        Parameters:
+            self (TestListAvailableOptions): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -577,9 +675,13 @@ class TestListAvailableOptions:
         assert t is None
         assert w is None
 
-    def test_drops_nan_windows(self, tmp_path: Path) -> None:
+    def test_drops_nan_windows(self: "TestListAvailableOptions", tmp_path: Path) -> None:
         """
-        Verify that list_available_options drops NaN window values.
+        This test verifies that the list_available_options method correctly drops NaN values from the window column when discovering options. The test creates a CSV file with two rows for the same domain and threshold, but one row has a valid window (3) while the other has NaN. The method should return a list of windows that includes only the valid window (3) and excludes the NaN, confirming that it properly handles missing window values during discovery. 
+
+        Parameters:
+            self (TestListAvailableOptions): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations.
 
         Returns:
             None
@@ -605,10 +707,13 @@ class TestListAvailableOptions:
 class TestPlotHorizontalMap:
     """ Tests for plot_horizontal_map Cartopy map plotting. """
 
-    def test_creates_map(self, tmp_path: Path) -> None:
+    def test_creates_map(self: "TestPlotHorizontalMap", tmp_path: Path) -> None:
         """
-        Verify that plot_horizontal_map creates a PNG file at the specified output path when Cartopy is available. The test skips gracefully if Cartopy is not installed using pytest.skip. A small synthetic DataArray is used to avoid needing real atmospheric data, and the returned path must point to
-        a file that exists on disk.
+        This test verifies that the plot_horizontal_map method creates and saves a PNG file when given a valid 2D DataArray with latitude and longitude coordinates. The test constructs a simple 10x20 DataArray with appropriate coordinate values, calls the plotting method with a title and output path, and asserts that the returned path is not None and points to an existing PNG file. This confirms that the method can successfully generate and save a horizontal map plot without error for the nominal case. 
+
+        Parameters:
+            self (TestPlotHorizontalMap): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations and output files.
 
         Returns:
             None
@@ -629,9 +734,13 @@ class TestPlotHorizontalMap:
         assert result is not None
         assert os.path.exists(result)
 
-    def test_default_output_path(self, tmp_path: Path) -> None:
+    def test_default_output_path(self: "TestPlotHorizontalMap", tmp_path: Path) -> None:
         """
-        Verify that plot_horizontal_map uses a default output path containing 'horizontal_map.png' when none is given. When the caller does not provide an explicit output_path, the method should construct one based on the configured plot directory. This ensures map plots always land in a predictable location even when called without a fully specified path.
+        This test verifies that the plot_horizontal_map method uses a default output path containing 'horizontal_map.png' when none is given. When the caller does not provide an explicit output_path, the method should construct one based on the configured plot directory. This ensures map plots always land in a predictable location even when called without a fully specified path. 
+
+        Parameters:
+            self (TestPlotHorizontalMap): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations and output files.
 
         Returns:
             None
@@ -655,7 +764,7 @@ class TestPlotHorizontalMap:
 
 def _write_csv(path: Path, rows: list) -> None:
     """
-    Write a list of row dictionaries as a CSV file at the given path. This helper is used by gap-closing visualizer tests to create minimal CSV fixtures with specific domain or threshold values to trigger filtered-empty branches. The DataFrame is written with index=False to match the format expected by Visualizer.read_csv_data.
+    This helper function writes a list of dictionaries to a CSV file at the specified path. Each dictionary in the list represents a row, with keys corresponding to column headers. This utility is used in multiple tests to create custom CSV files with specific content for testing the Visualizer's handling of various data scenarios. 
 
     Parameters:
         path (Path): Destination file path including filename and .csv extension.
@@ -670,7 +779,7 @@ def _write_csv(path: Path, rows: list) -> None:
 
 def _make_cfg(tmp_path: Path) -> ModvxConfig:
     """
-    Return a minimal ModvxConfig rooted in tmp_path with all standard sub-directory keys set. The configuration points fcst_dir, obs_dir, output_dir, csv_dir, and plot_dir to simple relative sub-directory names under tmp_path. This helper avoids repeating the same ModvxConfig construction boilerplate in every gap-closing visualizer test.
+    This helper function creates a ModvxConfig object with all directory paths set relative to the provided temporary path. The base_dir is set to the string representation of tmp_path, and subdirectories for forecasts, observations, output, CSVs, and plots are defined as fixed names under the base directory. This utility allows tests to easily generate a consistent configuration object that points to the appropriate locations within the pytest-managed temporary directory structure. 
 
     Parameters:
         tmp_path (Path): Pytest-supplied per-test temporary directory used as base_dir.
@@ -691,9 +800,13 @@ def _make_cfg(tmp_path: Path) -> ModvxConfig:
 class TestVisualizerEmptyFilteredData:
     """ Tests for plot_fss_vs_leadtime handling of empty or filtered-out data. """
 
-    def test_skip_when_filtered_empty(self, tmp_path: Path) -> None:
+    def test_skip_when_filtered_empty(self: "TestVisualizerEmptyFilteredData", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_vs_leadtime logs a warning and skips the combination when filtered data is empty. The CSV contains only a row for domain 'OTHER', so requesting domain 'GLOBAL' yields an empty DataFrame. The method should emit a logging warning containing 'No data for' and continue rather than raising an exception, ensuring the full batch loop is not aborted by a missing combination.
+        This test verifies that the plot_fss_vs_leadtime method returns None when the CSV data is present but all rows are filtered out due to no matching domain/thresh/window combinations. The test creates a CSV file with a single row that has domain 'OTHER', then calls the plotting method with domain='GLOBAL'. Since there are no rows matching 'GLOBAL', the method should recognize that there is no data to plot and return None rather than attempting to create an empty plot or raising an exception. This ensures that the method can gracefully handle cases where filtering results in no data without crashing. 
+
+        Parameters:
+            self (TestVisualizerEmptyFilteredData): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -705,21 +818,39 @@ class TestVisualizerEmptyFilteredData:
         ])
         cfg = _make_cfg(tmp_path)
         viz = Visualizer(cfg)
+
         import logging
-        with patch.object(logging.getLogger("modvx.visualizer"), "warning") as mock_warn:
+
+        warning_messages: list = []
+
+        class _CapturingHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if record.levelno == logging.WARNING:
+                    warning_messages.append(self.format(record))
+
+        _handler = _CapturingHandler()
+        _vx_logger = logging.getLogger("modvx.visualizer")
+        _vx_logger.addHandler(_handler)
+        try:
             viz.plot_fss_vs_leadtime(
                 domain="GLOBAL", thresh="90", window="3",
                 csv_dir=str(csv_dir), output_dir=str(tmp_path / "plots"),
             )
-        assert any("No data for" in str(c) for c in mock_warn.call_args_list)
+        finally:
+            _vx_logger.removeHandler(_handler)
+        assert any("No data for" in m for m in warning_messages)
 
 
 class TestVisualizerDiffEmptyControl:
     """ Tests for plot_fss_difference handling of empty control data. """
 
-    def test_empty_control_returns_none(self, tmp_path: Path) -> None:
+    def test_empty_control_returns_none(self: "TestVisualizerDiffEmptyControl", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_difference returns None when the control CSV contains no data matching the filter. The control CSV has only domain 'OTHER', so filtering for 'GLOBAL' yields an empty DataFrame. In this situation the difference cannot be computed and None must be returned rather than producing an empty or misleading plot.
+        This test verifies that the plot_fss_difference method returns None when the control experiment CSV file contains no rows matching the specified domain/thresh/window combination. The method should attempt to find control rows for the given filters, and if it finds none, it must return None rather than attempting to compute differences or generate a plot. This ensures that callers can handle the empty control case gracefully without needing to catch exceptions. 
+
+        Parameters:
+            self (TestVisualizerDiffEmptyControl): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -745,9 +876,13 @@ class TestVisualizerDiffEmptyControl:
 class TestVisualizerDiffEmptyExperiment:
     """ Tests for plot_fss_difference handling of empty experiment data. """
 
-    def test_skip_empty_experiment(self, tmp_path: Path) -> None:
+    def test_skip_empty_experiment(self: "TestVisualizerDiffEmptyExperiment", tmp_path: Path) -> None:
         """
-        Verify that plot_fss_difference continues past an experiment CSV with no data matching the filter. The experiment CSV contains only domain 'OTHER' while control has 'GLOBAL', so the diff loop finds no experiment rows and skips the combination. The method should still return a valid result path from the control data rather than returning None.
+        This test verifies that the plot_fss_difference method continues past an experiment CSV with no data matching the specified domain/thresh/window combination. The experiment CSV contains only domain 'OTHER' while the control CSV has 'GLOBAL', so the diff loop finds no experiment rows and skips the combination. The method should still return a valid result path from the control data rather than returning None.
+
+        Parameters:
+            self (TestVisualizerDiffEmptyExperiment): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -775,9 +910,13 @@ class TestVisualizerDiffEmptyExperiment:
 class TestVisualizerCartopyMissing:
     """ Tests for plot_horizontal_map handling of missing Cartopy dependency. """
 
-    def test_no_cartopy_returns_none(self, tmp_path: Path) -> None:
+    def test_no_cartopy_returns_none(self: "TestVisualizerCartopyMissing", tmp_path: Path) -> None:
         """
-        Verify that plot_horizontal_map returns None when the cartopy import fails at runtime. The method should catch the ImportError raised by the mocked import and return None rather than propagating the exception. This ensures deployments without Cartopy do not crash during map-plot attempts in generate_all_plots or CLI runs.
+        This test verifies that the plot_horizontal_map method returns None when the Cartopy library is not available. The method should attempt to import Cartopy, and if it fails with an ImportError, it must catch the exception and return None rather than raising an error. This ensures that callers can handle the missing Cartopy case gracefully without needing to catch exceptions. 
+
+        Parameters:
+            self (TestVisualizerCartopyMissing): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test configurations and output files.
 
         Returns:
             None
@@ -794,21 +933,28 @@ class TestVisualizerCartopyMissing:
                 raise ImportError("no cartopy")
             return original_import(name, *args, **kwargs)
 
-        with patch("builtins.__import__", side_effect=_mock_import):
+        builtins.__import__ = _mock_import
+        try:
             result = viz.plot_horizontal_map(
                 field=xr.DataArray(np.zeros((2, 2)), dims=["latitude", "longitude"]),
                 title="test",
                 output_path=str(tmp_path / "map.png"),
             )
+        finally:
+            builtins.__import__ = original_import
         assert result is None
 
 
 class TestVisualizerGenerateAllPlotsException:
     """ Tests for generate_all_plots handling of exceptions in plot_fss_vs_leadtime. """
 
-    def test_exception_counted(self, tmp_path: Path) -> None:
+    def test_exception_counted(self: "TestVisualizerGenerateAllPlotsException", tmp_path: Path) -> None:
         """
-        Verify that generate_all_plots returns 0 when plot_fss_vs_leadtime raises an exception for every combination. This simulates a scenario where all individual plot calls fail, for example due to a rendering error. The batch method must catch the exception, decrement or skip the count, and return 0 rather than propagating the exception to the caller.
+        This test verifies that generate_all_plots returns 0 when plot_fss_vs_leadtime raises an exception for every combination. This simulates a scenario where all individual plot calls fail, for example due to a rendering error. The batch method must catch the exception, decrement or skip the count, and return 0 rather than propagating the exception to the caller.
+
+        Parameters:
+            self (TestVisualizerGenerateAllPlotsException): The test class instance.
+            tmp_path (Path): Pytest-supplied temporary directory for creating test CSV files and output directories.
 
         Returns:
             None
@@ -823,8 +969,15 @@ class TestVisualizerGenerateAllPlotsException:
         cfg = _make_cfg(tmp_path)
         viz = Visualizer(cfg)
 
-        with patch.object(viz, "plot_fss_vs_leadtime", side_effect=RuntimeError("boom")):
+        def _raise_runtime(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        orig_method = viz.plot_fss_vs_leadtime
+        viz.plot_fss_vs_leadtime = _raise_runtime
+        try:
             count = viz.generate_all_plots(
                 csv_dir=str(csv_dir), output_dir=str(plot_dir),
             )
+        finally:
+            viz.plot_fss_vs_leadtime = orig_method
         assert count == 0
