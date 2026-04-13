@@ -52,6 +52,9 @@ mask_dir: "masks"
 output_dir: "output"
 debug_dir: "debug"
 
+# Obs file tag (version/grid suffix embedded in observation filenames after the vintage token)
+obs_file_tag: "V07B.SRCHHR.X360Y180.R1p0.FMT"
+
 # Obs vintage preference
 obs_vintage_preference:
   - "FNL"

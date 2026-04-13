@@ -74,8 +74,11 @@ csv_dir:    "csv"
 plot_dir:   "plots"
 
 # ---- filename templates ------------------------------------------------
+# Tag embedded in observation filenames after the vintage token.
+obs_file_tag: "V07B.SRCHHR.X360Y180.R1p0.FMT"
+
 observation_template: >-
-  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc
+  {obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000.E{date_key}T235959.{vintage}.{obs_file_tag}.nc
 
 obs_vintage_preference:
   - "FNL"

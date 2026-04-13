@@ -27,7 +27,7 @@ _DEFAULT_WINDOWS: List[int] = [1, 3, 5, 7, 9, 11, 13, 15]
 
 # Specify the default region masks available for verification. 
 _DEFAULT_REGIONS: Dict[str, str] = {
-    "SINGV": "singv_domain_mask.nc",
+    "SINGV": "SINGV.nc",
     "TROPICS": "G004_TROPICS.nc",
     "GLOBAL": "G004_GLOBAL.nc",
     "AFRICA": "G004_AFRICA.nc",
@@ -107,10 +107,13 @@ class ModvxConfig:
     plot_dir: str = "plots"
     cache_dir: Optional[str] = None
 
+    # Specify the tag embedded in observation filenames after the vintage token
+    obs_file_tag: str = "V07B.SRCHHR.X360Y180.R1p0.FMT"
+
     # Specify the template for constructing observation file paths
     observation_template: str = (
         "{obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000."
-        "E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc"
+        "E{date_key}T235959.{vintage}.{obs_file_tag}.nc"
     )
 
     # Specify the preferred vintage of observation data to use when multiple are available

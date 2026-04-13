@@ -105,11 +105,14 @@ class FileManager:
         # Resolve the base observation directory from the configuration
         obs_dir = self.config.resolve_relative_path(self.config.obs_dir)
 
+        # Retrieve the obs file tag from configuration (e.g. "V07B.SRCHHR.X360Y180.R1p0.FMT")
+        obs_file_tag = self.config.obs_file_tag
+
         # Iterate through the vintage preference list and return the path to the first existing file.
         for vintage in self.config.obs_vintage_preference:
             path = (
                 f"{obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000."
-                f"E{date_key}T235959.{vintage}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc"
+                f"E{date_key}T235959.{vintage}.{obs_file_tag}.nc"
             )
 
             # If the path exists, return it immediately
@@ -119,7 +122,7 @@ class FileManager:
         # Return the full path to the observation file corresponding to the first vintage in the preference list
         return (
             f"{obs_dir}/IMERG.A01H.VLD{date_key}.S{date_key}T000000."
-            f"E{date_key}T235959.{self.config.obs_vintage_preference[0]}.V07B.SRCHHR.X360Y180.R1p0.FMT.nc"
+            f"E{date_key}T235959.{self.config.obs_vintage_preference[0]}.{obs_file_tag}.nc"
         )
 
 
