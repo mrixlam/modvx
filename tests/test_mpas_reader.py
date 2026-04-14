@@ -15,6 +15,7 @@ Version: 1.0.0
 import datetime
 import types
 from pathlib import Path
+from typing import Iterator
 import numpy as np
 import pytest
 import xarray as xr
@@ -235,7 +236,7 @@ class TestGridFileConsistency:
     """ Structural validation tests for the real MPAS grid NetCDF file confirming coordinate variables, mesh dimensions, and topology arrays are present and within expected physical ranges. """
 
     @pytest.fixture(scope="class")
-    def grid(self: "TestGridFileConsistency") -> xr.Dataset:
+    def grid(self: "TestGridFileConsistency") -> Iterator[xr.Dataset]:
         """ 
         This fixture opens the real MPAS grid NetCDF file once per test class and yields the dataset for use in all grid consistency tests. The dataset is closed automatically after all tests finish. By using a class-scoped fixture, we minimize I/O overhead while still ensuring that all tests operate on the same grid file instance. The fixture does not perform any modifications to the dataset, allowing each test to independently verify the raw contents of the grid file as it would be read by load_mpas_precip. 
 
@@ -399,7 +400,7 @@ class TestDiagFileContents:
     """ Content validation tests checking variable presence, array shape, data type, and physical plausibility within a representative MPAS diagnostic file. """
 
     @pytest.fixture(scope="class")
-    def sample_diag(self: "TestDiagFileContents") -> xr.Dataset:
+    def sample_diag(self: "TestDiagFileContents") -> Iterator[xr.Dataset]:
         """ 
         This fixture opens a representative MPAS diagnostic NetCDF file from the test dataset that contains the expected rainc and rainnc variables. The fixture yields the opened dataset for use in all content validation tests within this class, ensuring that all tests operate on the same diag file instance. The dataset is closed automatically after all tests finish. By using a class-scoped fixture, we minimize I/O overhead while still allowing multiple tests to validate different aspects of the same diag file's contents, such as variable presence, shapes, data types, and value ranges.
 
